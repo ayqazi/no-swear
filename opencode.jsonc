@@ -1,0 +1,19 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "minimax/MiniMax-M2.7",
+  "mode": {
+    "build": {
+      "temperature": 0.1
+    },
+    "plan": {
+      "temperature": 0.1
+    }
+  },
+  "mcp": {
+    "ddg": {
+      "type": "local",
+      "command": ["uvx", "duckduckgo-mcp-server"],
+      "enabled": true
+    }
+  }
+}
