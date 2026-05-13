@@ -22,6 +22,8 @@ no-swear input.mkv output.mkv --audio 1
 | Flag | Required | Description |
 |------|----------|-------------|
 | `--audio <N>` | Yes | Audio stream index to censor (0-based). Passed directly to libav stream selection. User is trusted to pick an English track. |
+| `--model-name <NAME>` | No | Model filename to use from the Hugging Face repo (default: `ggml-tiny.en.bin`) |
+| `--model-repo <REPO>` | No | Hugging Face repo to download the model from (default: `ggerganov/whisper.cpp`) |
 
 ### Error conditions
 
@@ -38,6 +40,8 @@ no-swear input.mkv output.mkv --audio 1
 | `ffmpeg-next` | latest | libav bindings: demux, decode, encode, resample, mux, stream copy |
 | `whisper-rs` | latest | whisper.cpp bindings: load GGML model, transcribe PCM audio |
 | `rand` | latest | Generate white noise samples |
+| `reqwest` | latest | HTTP client for model download (blocking) |
+| `reqwest` | latest | HTTP client for model download (blocking) |
 
 ## Behaviour
 
@@ -53,18 +57,18 @@ Open `input` via `ffmpeg-next`. Identify all streams:
 
 ### 3. Model loading
 
-Load `whisper-rs` with the `tiny.en` model (GGML format).
+Load `whisper-rs` with a GGML format model. The model name and Hugging Face repo are configurable via `--model-name` and `--model-repo` flags (default: `ggml-tiny.en.bin` from `ggerganov/whisper.cpp`).
 
-**Model acquisition**: The application must download the model file on first use if not already present. Use `reqwest` (add to deps) to download from the canonical whisper.cpp Hugging Face repo:
+**Model acquisition**: The application must download the model file on first use if not already present. Use `reqwest` to download from the configured Hugging Face repo:
 ```
-https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin
+https://huggingface.co/{repo}/resolve/main/{model_name}
 ```
 
-**Cache location**: Store the downloaded model at a well-known path. Do NOT require the user to manage model files. The application handles download + caching transparently. Suggested cache path:
-- Linux/macOS: `~/.cache/no-swear/ggml-tiny.en.bin`
-- Windows: `%LOCALAPPDATA%/no-swear/ggml-tiny.en.bin`
+**Cache location**: Store the downloaded model at the standard whisper.cpp cache path. Do NOT require the user to manage model files. The application handles download + caching transparently.
+- Linux/macOS: `~/.cache/whisper/{model_name}`
+- Windows: `%LOCALAPPDATA%/whisper/{model_name}`
 
-If download fails, error with a message including the URL so the user can manually download.
+If download fails, error with a message including the URL. Partial downloads must not be left in the cache directory — use a `.part` suffix during download and atomically rename on completion.
 
 ### 4. Transcription pass
 
@@ -131,7 +135,6 @@ Must include:
 ## What is explicitly excluded from MVP
 
 - Subtitle-guided optimization (no SRT parsing)
-- Model selection (always tiny.en)
 - Language selection (always English)
 - GPU flag (auto-detect not implemented — CPU only)
 - `--words` flag (hardcoded word list)
