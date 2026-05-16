@@ -2,6 +2,7 @@ use clap::Parser;
 use ffmpeg_next as ffmpeg;
 use ffmpeg_next::Rational;
 use std::path::PathBuf;
+use std::time::Duration;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -17,7 +18,7 @@ struct Args {
     #[arg(
         long,
         default_value = "ggml-tiny.en-q5_1.bin",
-        help = "Whisper model filename to use from the Hugging Face repo"
+        help = "Whisper model filename to use from the repo. Recommended: ggml-medium.en-q5_0.bin"
     )]
     model_name: String,
 
@@ -36,6 +37,16 @@ struct CensoringPosition {
     word: String,
     start_ms: i64,
     end_ms: i64,
+}
+
+fn extract_samples(frame: &ffmpeg::frame::Audio) -> &[f32] {
+    let data = frame.data(0);
+    let count = frame.samples();
+    if count > 0 {
+        unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f32, count) }
+    } else {
+        &[]
+    }
 }
 
 fn extract_audio(
@@ -75,7 +86,6 @@ fn extract_audio(
     )?;
 
     let mut pcm_buffer: Vec<f32> = Vec::new();
-    let dst_channel_layout = dst_layout;
 
     for (pkt_stream, packet) in ictx.packets() {
         if pkt_stream.index() != audio_stream_index {
@@ -83,16 +93,15 @@ fn extract_audio(
         }
         decoder.send_packet(&packet)?;
         let mut frame = ffmpeg::frame::Audio::empty();
-        while decoder.receive_frame(&mut frame).is_ok() {
-            let mut dst = ffmpeg::frame::Audio::empty();
-            resampler.run(&frame, &mut dst)?;
-            let data = dst.data(0);
-            let count = dst.samples();
-            if count > 0 {
-                let samples: &[f32] = unsafe {
-                    std::slice::from_raw_parts(data.as_ptr() as *const f32, count)
-                };
-                pcm_buffer.extend_from_slice(samples);
+        loop {
+            match decoder.receive_frame(&mut frame) {
+                Ok(()) => {
+                    let mut dst = ffmpeg::frame::Audio::empty();
+                    resampler.run(&frame, &mut dst)?;
+                    pcm_buffer.extend_from_slice(extract_samples(&dst));
+                }
+                Err(ffmpeg::Error::Eof) => break,
+                Err(_) => break,
             }
         }
     }
@@ -102,16 +111,15 @@ fn extract_audio(
     }
     decoder.send_packet(&ffmpeg::packet::Packet::empty())?;
     let mut frame = ffmpeg::frame::Audio::empty();
-    while decoder.receive_frame(&mut frame).is_ok() {
-        let mut dst = ffmpeg::frame::Audio::empty();
-        resampler.run(&frame, &mut dst)?;
-        let data = dst.data(0);
-        let count = dst.samples();
-        if count > 0 {
-            let samples: &[f32] = unsafe {
-                std::slice::from_raw_parts(data.as_ptr() as *const f32, count)
-            };
-            pcm_buffer.extend_from_slice(samples);
+    loop {
+        match decoder.receive_frame(&mut frame) {
+            Ok(()) => {
+                let mut dst = ffmpeg::frame::Audio::empty();
+                resampler.run(&frame, &mut dst)?;
+                pcm_buffer.extend_from_slice(extract_samples(&dst));
+            }
+            Err(ffmpeg::Error::Eof) => break,
+            Err(_) => break,
         }
     }
 
@@ -120,19 +128,12 @@ fn extract_audio(
     }
     loop {
         let mut dst = ffmpeg::frame::Audio::empty();
-        unsafe { dst.alloc(dst_format, 4096, dst_channel_layout); }
+        unsafe { dst.alloc(dst_format, 4096, dst_layout); }
         let delay = resampler.flush(&mut dst)?;
         if delay.is_none() {
             break;
         }
-        let data = dst.data(0);
-        let count = dst.samples();
-        if count > 0 {
-            let samples: &[f32] = unsafe {
-                std::slice::from_raw_parts(data.as_ptr() as *const f32, count)
-            };
-            pcm_buffer.extend_from_slice(samples);
-        }
+        pcm_buffer.extend_from_slice(extract_samples(&dst));
     }
 
     if pcm_buffer.is_empty() {
@@ -240,7 +241,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let output_path = std::path::Path::new(&args.output);
     if let Some(parent) = output_path.parent() {
-        if !parent.exists() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
             return Err(format!("Output directory does not exist: {}", parent.display()).into());
         }
     }
@@ -302,7 +303,11 @@ fn ensure_model(name: &str, repo: &str) -> Result<PathBuf, Box<dyn std::error::E
 
     println!("Downloading model from {} ...", url);
 
-    let response = reqwest::blocking::get(&url).map_err(|e| {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(3600))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+    let response = client.get(&url).send().map_err(|e| {
         let _ = std::fs::remove_file(&temp_path);
         format!("Failed to download model from {}: {}", url, e)
     })?;
@@ -334,6 +339,7 @@ fn passthrough(mut ictx: ffmpeg::format::context::Input, output_path: &str) -> R
         ist_time_bases[ist_index] = ist.time_base();
         let mut ost = octx.add_stream(ffmpeg::encoder::find(ffmpeg::codec::Id::None))?;
         ost.set_parameters(ist.parameters());
+        // Zero codec tag so libav auto-selects the correct tag for the output container
         unsafe {
             (*ost.parameters().as_mut_ptr()).codec_tag = 0;
         }
@@ -342,16 +348,18 @@ fn passthrough(mut ictx: ffmpeg::format::context::Input, output_path: &str) -> R
     octx.set_metadata(ictx.metadata().to_owned());
     octx.write_header()?;
 
-    for (stream, mut packet) in ictx.packets() {
-        let ist_index = stream.index();
-        let ost = octx.stream(ist_index).ok_or("output stream not found")?;
-        packet.rescale_ts(ist_time_bases[ist_index], ost.time_base());
-        packet.set_position(-1);
-        packet.set_stream(ist_index);
-        packet.write_interleaved(&mut octx)?;
-    }
+    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+        for (stream, mut packet) in ictx.packets() {
+            let ist_index = stream.index();
+            let ost = octx.stream(ist_index).ok_or("output stream not found")?;
+            packet.rescale_ts(ist_time_bases[ist_index], ost.time_base());
+            packet.set_position(-1);
+            packet.set_stream(ist_index);
+            packet.write_interleaved(&mut octx)?;
+        }
+        Ok(())
+    })();
 
     octx.write_trailer()?;
-
-    Ok(())
+    result
 }
