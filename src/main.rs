@@ -16,7 +16,7 @@ struct Args {
 
     #[arg(
         long,
-        default_value = "ggml-tiny.en.bin",
+        default_value = "ggml-tiny.en-q5_1.bin",
         help = "Whisper model filename to use from the Hugging Face repo"
     )]
     model_name: String,
@@ -34,21 +34,70 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args = Args::parse();
 
+    let input_path = std::path::Path::new(&args.input);
+    if !input_path.exists() {
+        return Err(format!("Input file does not exist: {}", args.input).into());
+    }
+
+    let ictx = ffmpeg::format::input(&args.input)?;
+
+    let nb_streams = ictx.nb_streams() as usize;
+    if args.audio >= nb_streams {
+        let available: Vec<String> = ictx
+            .streams()
+            .map(|s| {
+                format!(
+                    "  [{}] {:?}",
+                    s.index(),
+                    s.parameters().medium()
+                )
+            })
+            .collect();
+        return Err(format!(
+            "Audio stream index {} does not exist. Available streams:\n{}",
+            args.audio,
+            available.join("\n")
+        )
+        .into());
+    }
+
+    let audio_stream = ictx.stream(args.audio).ok_or("audio stream not found")?;
+    if audio_stream.parameters().medium() != ffmpeg::media::Type::Audio {
+        return Err(format!(
+            "Stream {} is not an audio stream (type: {:?})",
+            args.audio,
+            audio_stream.parameters().medium()
+        )
+        .into());
+    }
+
+    let output_path = std::path::Path::new(&args.output);
+    if let Some(parent) = output_path.parent() {
+        if !parent.exists() {
+            return Err(format!("Output directory does not exist: {}", parent.display()).into());
+        }
+    }
+    if output_path.exists() && output_path.metadata()?.permissions().readonly() {
+        return Err(format!("Output file is not writable: {}", args.output).into());
+    }
+
     let model_path = ensure_model(&args.model_name, &args.model_repo)?;
     println!("Using model: {}", model_path.display());
 
-    passthrough(&args.input, &args.output)?;
+    passthrough(ictx, &args.output)?;
+
+    println!("Copied all streams from {} to {}", args.input, args.output);
 
     Ok(())
 }
 
-fn model_cache_dir() -> PathBuf {
-    let home = std::env::var("HOME").expect("HOME environment variable not set");
-    PathBuf::from(home).join(".cache").join("whisper")
+fn model_cache_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let home = dirs::home_dir().ok_or("Could not determine home directory")?;
+    Ok(home.join(".cache").join("whisper"))
 }
 
 fn ensure_model(name: &str, repo: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let cache_dir = model_cache_dir();
+    let cache_dir = model_cache_dir()?;
     std::fs::create_dir_all(&cache_dir)?;
 
     let model_path = cache_dir.join(name);
@@ -87,8 +136,7 @@ fn ensure_model(name: &str, repo: &str) -> Result<PathBuf, Box<dyn std::error::E
     Ok(model_path)
 }
 
-fn passthrough(input_path: &str, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let mut ictx = ffmpeg::format::input(&input_path)?;
+fn passthrough(mut ictx: ffmpeg::format::context::Input, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let mut octx = ffmpeg::format::output(&output_path)?;
 
     let nb_streams = ictx.nb_streams() as usize;
@@ -116,8 +164,6 @@ fn passthrough(input_path: &str, output_path: &str) -> Result<(), Box<dyn std::e
     }
 
     octx.write_trailer()?;
-
-    println!("Copied all streams from {} to {}", input_path, output_path);
 
     Ok(())
 }
