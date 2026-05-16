@@ -4,3 +4,4 @@
 - NEVER create abstractions unless they clearly make readability easier. Linear code describing an algorithm or process is preferred. Repeat yourself twice, factor out abstractions on the third use.
 - NEVER factor out short, simple code that is near-impossible get wrong (this overrides the previous rule)
 - Expect ffmpeg tools to be available; stop and display an error if you cannot run them
+- Use data/swearing-clip.mkv to test all changes; if not found, no hunting for media - just show user an error
