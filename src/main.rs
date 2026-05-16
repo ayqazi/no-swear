@@ -148,6 +148,65 @@ fn extract_audio(
     Ok(pcm_buffer)
 }
 
+fn find_bleeps_by_segment(
+    state: &whisper_rs::WhisperState,
+    swear_words: &[&str],
+    verbose: bool,
+) -> Result<Vec<CensoringPosition>, Box<dyn std::error::Error>> {
+    let n_segments = state.full_n_segments();
+    let mut censored = Vec::new();
+    for i in 0..n_segments {
+        let segment = state.get_segment(i).ok_or("failed to get segment")?;
+        let text = segment.to_str()?.to_lowercase();
+        for &word in swear_words {
+            if text.contains(word) {
+                let t0 = segment.start_timestamp() * 10;
+                let t1 = segment.end_timestamp() * 10;
+                censored.push(CensoringPosition {
+                    word: word.to_string(),
+                    start_ms: t0,
+                    end_ms: t1,
+                });
+            }
+        }
+    }
+    if verbose {
+        eprintln!("Segment-level matching found {} bleep positions", censored.len());
+    }
+    Ok(censored)
+}
+
+fn find_bleeps_by_token(
+    state: &whisper_rs::WhisperState,
+    swear_words: &[&str],
+    verbose: bool,
+) -> Result<Vec<CensoringPosition>, Box<dyn std::error::Error>> {
+    let n_segments = state.full_n_segments();
+    let mut censored = Vec::new();
+    for i in 0..n_segments {
+        let segment = state.get_segment(i).ok_or("failed to get segment")?;
+        let n_tokens = segment.n_tokens();
+        for j in 0..n_tokens {
+            let token = segment.get_token(j).ok_or("failed to get token")?;
+            let token_text = token.to_str()?.to_lowercase();
+            let token_data = token.token_data();
+            for &word in swear_words {
+                if token_text.contains(word) {
+                    censored.push(CensoringPosition {
+                        word: word.to_string(),
+                        start_ms: token_data.t0 * 10,
+                        end_ms: token_data.t1 * 10,
+                    });
+                }
+            }
+        }
+    }
+    if verbose {
+        eprintln!("Token-level matching found {} bleep positions", censored.len());
+    }
+    Ok(censored)
+}
+
 fn transcribe(
     pcm_buffer: &[f32],
     state: &mut whisper_rs::WhisperState,
@@ -172,30 +231,18 @@ fn transcribe(
         eprintln!("Transcription complete, {} segments", state.full_n_segments());
     }
 
-    let mut censored = Vec::new();
     let swear_words = ["fuck", "shit", "damn", "bitch", "dick", "cunt", "bastard", "asshole"];
-    let n_segments = state.full_n_segments();
-    for i in 0..n_segments {
-        let segment = state.get_segment(i).ok_or("failed to get segment")?;
-        let text = segment.to_str()?.to_lowercase();
-        for &word in &swear_words {
-            if text.contains(word) {
-                let t0 = segment.start_timestamp() * 10;
-                let t1 = segment.end_timestamp() * 10;
-                censored.push(CensoringPosition {
-                    word: word.to_string(),
-                    start_ms: t0,
-                    end_ms: t1,
-                });
-            }
-        }
-    }
 
+    let use_word_boundary_fix = std::env::var("CENSOR_WORD_BOUNDARY_FIX").is_ok();
     if verbose {
-        eprintln!("Found {} swear word occurrences to censor", censored.len());
+        eprintln!("CENSOR_WORD_BOUNDARY_FIX={}", if use_word_boundary_fix { "enabled (using token-level matching)" } else { "disabled (using segment-level matching)" });
     }
 
-    Ok(censored)
+    if use_word_boundary_fix {
+        find_bleeps_by_token(state, &swear_words, verbose)
+    } else {
+        find_bleeps_by_segment(state, &swear_words, verbose)
+    }
 }
 
 fn apply_noise(
