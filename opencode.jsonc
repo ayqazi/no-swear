@@ -1,12 +1,24 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "minimax/MiniMax-M2.7",
+  "model": "openrouter/deepseek/deepseek-v4-flash",
+  "small_model": "minimax/MiniMax-M2.7",
   "mode": {
     "build": {
       "temperature": 0.1
     },
     "plan": {
       "temperature": 0.1
+    }
+  },
+  "permission": {
+    "bash": {
+      "git commit *": "deny",
+      "git checkout *": "deny",
+      "git reset *": "deny",
+      "git rm *": "deny",
+      "git cherry-pick *": "deny",
+      "rm *": "deny",
+      "mv *": "deny"
     }
   },
   "mcp": {
