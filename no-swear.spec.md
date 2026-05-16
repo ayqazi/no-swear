@@ -2,7 +2,7 @@
 
 ## Overview
 
-A CLI tool that censors profanity in any media file (video or audio) by replacing matching words with white noise. Uses libav (via `ffmpeg-next`) for all media operations and whisper.cpp (via `whisper-rs`) for speech-to-text.
+A CLI tool that censors profanity in any media file (video or audio) by replacing matching words with brown noise. Uses libav (via `ffmpeg-next`) for all media operations and whisper.cpp (via `whisper-rs`) for speech-to-text.
 
 ## CLI Interface
 
@@ -40,7 +40,7 @@ no-swear input.mkv output.mkv --audio 1
 | `clap` | latest | CLI argument parsing (positional + flags) |
 | `ffmpeg-next` | latest | libav bindings: demux, decode, encode, resample, mux, stream copy |
 | `whisper-rs` | latest | whisper.cpp bindings: load GGML model, transcribe PCM audio |
-| `rand` | latest | Generate white noise samples |
+| `rand` | latest | Generate noise samples |
 | `reqwest` | latest | HTTP client for model download (blocking) |
 
 ## Behaviour
@@ -98,9 +98,9 @@ For each stream in the input:
 | Subtitles | Stream copy (passthrough, no re-encode) |
 | Attachments / data | Stream copy (passthrough, no re-encode) |
 | Audio (not selected) | Stream copy (passthrough, no re-encode) |
-| Audio (selected) | Decode → apply white noise → encode as AAC |
+| Audio (selected) | Decode → apply brown noise → encode as AAC |
 
-**White noise application**: For each `BleepPosition`, replace the audio samples in that time range with white noise at 80% of full scale. Samples outside bleep ranges pass through unmodified. White noise is generated per-channel (independent noise for each channel).
+**Brown noise application**: For each `BleepPosition`, replace the audio samples in that time range with brown noise (random walk / integrated white noise) at approximately 1/35th the amplitude of the surrounding dialog (~0.023 of full scale). Samples outside bleep ranges pass through unmodified. Brown noise is generated per-channel (independent noise for each channel).
 
 **AAC encoding**: Use libav's AAC encoder (`AV_CODEC_ID_AAC`). Bitrate: 640 kbps (Blu-ray quality). If the AAC encoder is not available in the libav build, error with a message.
 

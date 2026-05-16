@@ -1,6 +1,7 @@
 use clap::Parser;
 use ffmpeg_next as ffmpeg;
 use ffmpeg_next::Rational;
+use rand::Rng;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -197,6 +198,386 @@ fn transcribe(
     Ok(censored)
 }
 
+fn apply_noise(
+    frame: &mut ffmpeg::frame::Audio,
+    censored: &[CensoringPosition],
+    time_base: Rational,
+    sample_rate: i32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let frame_pts = match frame.pts() {
+        Some(pts) => pts,
+        None => return Ok(()),
+    };
+
+    let frame_start_ms = frame_pts * time_base.0 as i64 * 1000 / time_base.1 as i64;
+    let frame_duration_ms = frame.samples() as i64 * 1000 / sample_rate as i64;
+    let frame_end_ms = frame_start_ms + frame_duration_ms;
+
+    let channels = frame.channels() as usize;
+    let nb_samples = frame.samples();
+
+    for cp in censored {
+        if cp.start_ms >= frame_end_ms || cp.end_ms <= frame_start_ms {
+            continue;
+        }
+
+        let overlap_start = (cp.start_ms - frame_start_ms).max(0) * sample_rate as i64 / 1000;
+        let overlap_end = ((cp.end_ms - frame_start_ms) * sample_rate as i64 / 1000 - 1).min(nb_samples as i64 - 1);
+
+        if overlap_start > overlap_end {
+            continue;
+        }
+
+        for ch in 0..channels {
+            let data = frame.data_mut(ch);
+            let samples = unsafe {
+                std::slice::from_raw_parts_mut(
+                    data.as_mut_ptr() as *mut f32,
+                    nb_samples,
+                )
+            };
+            let mut rng = rand::thread_rng();
+            let max_amp = 0.8f32 / 35.0;
+            let mut value = 0.0f32;
+            for i in overlap_start..=overlap_end {
+                value += (rng.gen::<f32>() - 0.5) * max_amp * 0.125;
+                value = value.clamp(-max_amp, max_amp);
+                samples[i as usize] = value;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn drain_encoder_packets(
+    encoder: &mut ffmpeg::codec::encoder::audio::Encoder,
+    octx: &mut ffmpeg::format::context::Output,
+    stream_index: usize,
+    src_tb: Rational,
+    dst_tb: Rational,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut packet = ffmpeg::Packet::empty();
+    loop {
+        match encoder.receive_packet(&mut packet) {
+            Ok(()) => {
+                packet.set_stream(stream_index);
+                packet.rescale_ts(src_tb, dst_tb);
+                packet.write_interleaved(octx)?;
+            }
+            Err(ffmpeg::Error::Eof) => break,
+            Err(ffmpeg::Error::Other { errno: ffmpeg::util::error::EAGAIN }) => break,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(())
+}
+
+fn flush_encoder(
+    encoder: &mut ffmpeg::codec::encoder::audio::Encoder,
+    octx: &mut ffmpeg::format::context::Output,
+    stream_index: usize,
+    src_tb: Rational,
+    dst_tb: Rational,
+) -> Result<(), Box<dyn std::error::Error>> {
+    encoder.send_eof()?;
+    let mut packet = ffmpeg::Packet::empty();
+    let mut retries = 0;
+    const MAX_RETRIES: i32 = 100;
+    loop {
+        match encoder.receive_packet(&mut packet) {
+            Ok(()) => {
+                retries = 0;
+                packet.set_stream(stream_index);
+                packet.rescale_ts(src_tb, dst_tb);
+                packet.write_interleaved(octx)?;
+            }
+            Err(ffmpeg::Error::Eof) => break,
+            Err(ffmpeg::Error::Other { errno: ffmpeg::util::error::EAGAIN }) => {
+                retries += 1;
+                if retries >= MAX_RETRIES {
+                    return Err("encoder flush timed out after 100 retries".into());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(())
+}
+
+fn encode_and_mux(
+    input_path: &str,
+    output_path: &str,
+    audio_stream_index: usize,
+    censored: &[CensoringPosition],
+    verbose: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut ictx = ffmpeg::format::input(&input_path)?;
+    let aac_codec = ffmpeg::encoder::find(ffmpeg::codec::Id::AAC)
+        .ok_or("AAC encoder not available in this ffmpeg build")?;
+
+    let mut octx = ffmpeg::format::output(&output_path)?;
+
+    let nb_streams = ictx.nb_streams() as usize;
+    let mut ist_time_bases = vec![Rational(0, 1); nb_streams];
+
+    let audio_ist = ictx.stream(audio_stream_index).ok_or("audio stream not found")?;
+    let audio_ctx = ffmpeg::codec::context::Context::from_parameters(audio_ist.parameters())?;
+    let mut decoder = audio_ctx.decoder().audio()?;
+
+    let src_format = decoder.format();
+    let src_layout = decoder.channel_layout();
+    let src_rate = decoder.rate() as i32;
+    let num_channels = src_layout.channels() as usize;
+
+    if verbose {
+        eprintln!("Source audio for encoding: format={:?} rate={} layout={:?} ({} channels)", src_format, src_rate, src_layout, num_channels);
+    }
+
+    let dst_format = ffmpeg::util::format::Sample::F32(ffmpeg::util::format::sample::Type::Planar);
+
+    for (ist_index, ist) in ictx.streams().enumerate() {
+        if ist_index >= audio_stream_index {
+            break;
+        }
+        ist_time_bases[ist_index] = ist.time_base();
+        let mut ost = octx.add_stream(ffmpeg::encoder::find(ffmpeg::codec::Id::None))?;
+        ost.set_parameters(ist.parameters());
+        unsafe {
+            (*ost.parameters().as_mut_ptr()).codec_tag = 0;
+        }
+    }
+
+    let enc_time_base = Rational(1, src_rate);
+    let aac_frame_size = 1024usize;
+    let mut encoder = {
+        let mut audio_ost = octx.add_stream(aac_codec)?;
+
+        let enc_ctx = ffmpeg::codec::context::Context::from_parameters(audio_ost.parameters())?;
+        let mut enc_builder = enc_ctx.encoder().audio()?;
+        enc_builder.set_rate(src_rate);
+        enc_builder.set_channel_layout(src_layout);
+        enc_builder.set_format(dst_format);
+        enc_builder.set_bit_rate(640_000);
+        enc_builder.set_time_base(enc_time_base);
+
+        let encoder = enc_builder.open_as(aac_codec)?;
+        audio_ost.set_parameters(&encoder);
+        encoder
+    };
+
+    for (ist_index, ist) in ictx.streams().enumerate() {
+        if ist_index <= audio_stream_index {
+            continue;
+        }
+        ist_time_bases[ist_index] = ist.time_base();
+        let mut ost = octx.add_stream(ffmpeg::encoder::find(ffmpeg::codec::Id::None))?;
+        ost.set_parameters(ist.parameters());
+        unsafe {
+            (*ost.parameters().as_mut_ptr()).codec_tag = 0;
+        }
+    }
+
+    let mut resampler = ffmpeg::software::resampling::context::Context::get(
+        src_format,
+        src_layout,
+        src_rate as u32,
+        dst_format,
+        src_layout,
+        src_rate as u32,
+    )?;
+
+    octx.set_metadata(ictx.metadata().to_owned());
+
+    if verbose {
+        eprintln!("Writing output header");
+    }
+    octx.write_header()?;
+
+    let audio_ost_time_base = {
+        let aost = octx.stream(audio_stream_index).ok_or("audio output stream not found")?;
+        aost.time_base()
+    };
+    if verbose {
+        eprintln!("Audio output stream time_base: {}/{}", audio_ost_time_base.0, audio_ost_time_base.1);
+    }
+
+    let mut channel_bufs: Vec<Vec<f32>> = vec![Vec::with_capacity(aac_frame_size * 2); num_channels];
+    let mut encoder_pts_offset: i64 = 0;
+
+    fn flush_buffers(
+        channel_bufs: &mut Vec<Vec<f32>>,
+        encoder: &mut ffmpeg::codec::encoder::audio::Encoder,
+        octx: &mut ffmpeg::format::context::Output,
+        audio_stream_index: usize,
+        enc_time_base: Rational,
+        src_layout: ffmpeg::channel_layout::ChannelLayout,
+        dst_format: ffmpeg::util::format::Sample,
+        src_rate: i32,
+        aac_frame_size: usize,
+        encoder_pts_offset: &mut i64,
+        censored: &[CensoringPosition],
+        ost_tb: Rational,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        while channel_bufs[0].len() >= aac_frame_size {
+            let mut enc_frame = ffmpeg::frame::Audio::new(
+                dst_format,
+                aac_frame_size,
+                src_layout,
+            );
+            enc_frame.set_rate(src_rate as u32);
+
+            for ch in 0..channel_bufs.len() {
+                let drained: Vec<f32> = channel_bufs[ch].drain(..aac_frame_size).collect();
+                let plane = unsafe {
+                    std::slice::from_raw_parts_mut(
+                        enc_frame.data_mut(ch).as_mut_ptr() as *mut f32,
+                        aac_frame_size,
+                    )
+                };
+                plane.copy_from_slice(&drained);
+            }
+
+            let frame_pts = Some(*encoder_pts_offset);
+            enc_frame.set_pts(frame_pts);
+            *encoder_pts_offset += aac_frame_size as i64;
+
+            apply_noise(&mut enc_frame, censored, enc_time_base, src_rate)?;
+
+            encoder.send_frame(&enc_frame)?;
+            drain_encoder_packets(encoder, octx, audio_stream_index, enc_time_base, ost_tb)?;
+        }
+        Ok(())
+    }
+
+    fn drain_decode_frames(
+        decoder: &mut ffmpeg::codec::decoder::audio::Audio,
+        resampler: &mut ffmpeg::software::resampling::context::Context,
+        channel_bufs: &mut Vec<Vec<f32>>,
+        num_channels: usize,
+        verbose: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut frame = ffmpeg::frame::Audio::empty();
+        loop {
+            match decoder.receive_frame(&mut frame) {
+                Ok(()) => {
+                    let mut resampled = ffmpeg::frame::Audio::empty();
+                    resampler.run(&frame, &mut resampled)?;
+                    let sample_count = resampled.samples();
+                    for ch in 0..num_channels {
+                        let data = resampled.data(ch);
+                        let samples = unsafe {
+                            std::slice::from_raw_parts(data.as_ptr() as *const f32, sample_count)
+                        };
+                        channel_bufs[ch].extend_from_slice(samples);
+                    }
+                }
+                Err(ffmpeg::Error::Eof) => break,
+                Err(e) => {
+                    if verbose {
+                        eprintln!("Warning: decoder error during drain: {:?}", e);
+                    }
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    if verbose {
+        eprintln!("Processing packets (selected audio will be re-encoded, others stream-copied)");
+    }
+
+    for (stream, mut packet) in ictx.packets() {
+        let ist_index = stream.index();
+
+        if ist_index == audio_stream_index {
+            decoder.send_packet(&packet)?;
+            drain_decode_frames(
+                &mut decoder, &mut resampler, &mut channel_bufs, num_channels, verbose,
+            )?;
+            flush_buffers(
+                &mut channel_bufs, &mut encoder, &mut octx, audio_stream_index, enc_time_base,
+                src_layout, dst_format, src_rate, aac_frame_size,
+                &mut encoder_pts_offset, censored, audio_ost_time_base,
+            )?;
+        } else {
+            let ost = octx.stream(ist_index).ok_or("output stream not found")?;
+            packet.rescale_ts(ist_time_bases[ist_index], ost.time_base());
+            packet.set_position(-1);
+            packet.set_stream(ist_index);
+            packet.write_interleaved(&mut octx)?;
+        }
+    }
+
+    if verbose {
+        eprintln!("Flushing decoder");
+    }
+    decoder.send_packet(&ffmpeg::packet::Packet::empty())?;
+    drain_decode_frames(
+        &mut decoder, &mut resampler, &mut channel_bufs, num_channels, verbose,
+    )?;
+
+    if verbose {
+        eprintln!("Flushing resampler");
+    }
+    loop {
+        let mut dst = ffmpeg::frame::Audio::empty();
+        unsafe { dst.alloc(dst_format, 4096, src_layout); }
+        let delay = resampler.flush(&mut dst)?;
+        if delay.is_none() {
+            break;
+        }
+        for ch in 0..num_channels {
+            let data = dst.data(ch);
+            let sample_count = dst.samples();
+            let samples = unsafe {
+                std::slice::from_raw_parts(data.as_ptr() as *const f32, sample_count)
+            };
+            channel_bufs[ch].extend_from_slice(samples);
+        }
+    }
+
+    if channel_bufs[0].len() >= aac_frame_size {
+        flush_buffers(
+            &mut channel_bufs, &mut encoder, &mut octx, audio_stream_index, enc_time_base,
+            src_layout, dst_format, src_rate, aac_frame_size,
+            &mut encoder_pts_offset, censored, audio_ost_time_base,
+        )?;
+    }
+    if channel_bufs[0].len() > 0 {
+        if verbose {
+            eprintln!("Padding trailing {} samples to AAC frame size {}", channel_bufs[0].len(), aac_frame_size);
+        }
+        for ch in 0..num_channels {
+            channel_bufs[ch].resize(aac_frame_size, 0.0f32);
+        }
+    }
+
+    flush_buffers(
+        &mut channel_bufs, &mut encoder, &mut octx, audio_stream_index, enc_time_base,
+        src_layout, dst_format, src_rate, aac_frame_size,
+        &mut encoder_pts_offset, censored, audio_ost_time_base,
+    )?;
+
+    if verbose {
+        eprintln!("Flushing encoder");
+    }
+    flush_encoder(&mut encoder, &mut octx, audio_stream_index, enc_time_base, audio_ost_time_base)?;
+
+    if verbose {
+        eprintln!("Writing trailer");
+    }
+    octx.write_trailer()?;
+
+    if verbose {
+        eprintln!("Encoder wrote {} samples per channel", encoder_pts_offset);
+    }
+
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     ffmpeg::init()?;
 
@@ -269,13 +650,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if args.verbose {
-        eprintln!("Seeking input back to start for passthrough");
+        eprintln!("Opening fresh input context for encoding pass");
     }
-    ictx.seek(0, ..0)?;
+    drop(ictx);
 
-    passthrough(ictx, &args.output)?;
+    encode_and_mux(&args.input, &args.output, args.audio, &censored, args.verbose)?;
 
-    println!("Copied all streams from {} to {}", args.input, args.output);
+    println!("Processed {} -> {} (censored {} words)", args.input, args.output, censored.len());
 
     Ok(())
 }
@@ -327,39 +708,4 @@ fn ensure_model(name: &str, repo: &str) -> Result<PathBuf, Box<dyn std::error::E
     std::fs::rename(&temp_path, &model_path)?;
     println!("Model cached at {}", model_path.display());
     Ok(model_path)
-}
-
-fn passthrough(mut ictx: ffmpeg::format::context::Input, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let mut octx = ffmpeg::format::output(&output_path)?;
-
-    let nb_streams = ictx.nb_streams() as usize;
-    let mut ist_time_bases = vec![Rational(0, 1); nb_streams];
-
-    for (ist_index, ist) in ictx.streams().enumerate() {
-        ist_time_bases[ist_index] = ist.time_base();
-        let mut ost = octx.add_stream(ffmpeg::encoder::find(ffmpeg::codec::Id::None))?;
-        ost.set_parameters(ist.parameters());
-        // Zero codec tag so libav auto-selects the correct tag for the output container
-        unsafe {
-            (*ost.parameters().as_mut_ptr()).codec_tag = 0;
-        }
-    }
-
-    octx.set_metadata(ictx.metadata().to_owned());
-    octx.write_header()?;
-
-    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
-        for (stream, mut packet) in ictx.packets() {
-            let ist_index = stream.index();
-            let ost = octx.stream(ist_index).ok_or("output stream not found")?;
-            packet.rescale_ts(ist_time_bases[ist_index], ost.time_base());
-            packet.set_position(-1);
-            packet.set_stream(ist_index);
-            packet.write_interleaved(&mut octx)?;
-        }
-        Ok(())
-    })();
-
-    octx.write_trailer()?;
-    result
 }
