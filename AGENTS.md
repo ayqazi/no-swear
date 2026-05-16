@@ -1,3 +1,5 @@
 - NEVER glob or grep the whole repository. You must explore from shallow to deep and only glob, grep, or read small focused slices of the codebase. Be token efficient.
 - All spec.md files are meant to be full declarations of behavior with only important technical details. They must be in timeless, version-less language and must never be rewritten - only surgical edits and tweaks for consistency are allowed.
   - NEVER edit them unless specifically told to
+- NEVER create abstractions unless they clearly make readability easier. Linear code describing an algorithm or process is preferred. Repeat yourself twice, factor out abstractions on the third use.
+- NEVER factor out short, simple code that is near-impossible get wrong (this overrides the previous rule)

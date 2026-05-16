@@ -22,7 +22,7 @@ no-swear input.mkv output.mkv --audio 1
 | Flag | Required | Description |
 |------|----------|-------------|
 | `--audio <N>` | Yes | Audio stream index to censor (0-based). Passed directly to libav stream selection. User is trusted to pick an English track. |
-| `--model-name <NAME>` | No | Model filename to use from the Hugging Face repo (default: `ggml-tiny.en.bin`) |
+| `--model-name <NAME>` | No | Model filename to use from the Hugging Face repo (default: `ggml-tiny.en-q5_1.bin`) |
 | `--model-repo <REPO>` | No | Hugging Face repo to download the model from (default: `ggerganov/whisper.cpp`) |
 
 ### Error conditions
@@ -41,7 +41,6 @@ no-swear input.mkv output.mkv --audio 1
 | `whisper-rs` | latest | whisper.cpp bindings: load GGML model, transcribe PCM audio |
 | `rand` | latest | Generate white noise samples |
 | `reqwest` | latest | HTTP client for model download (blocking) |
-| `reqwest` | latest | HTTP client for model download (blocking) |
 
 ## Behaviour
 
@@ -57,7 +56,7 @@ Open `input` via `ffmpeg-next`. Identify all streams:
 
 ### 3. Model loading
 
-Load `whisper-rs` with a GGML format model. The model name and Hugging Face repo are configurable via `--model-name` and `--model-repo` flags (default: `ggml-tiny.en.bin` from `ggerganov/whisper.cpp`).
+Load `whisper-rs` with a GGML format model. The model name and Hugging Face repo are configurable via `--model-name` and `--model-repo` flags (defaults listed above).
 
 **Model acquisition**: The application must download the model file on first use if not already present. Use `reqwest` to download from the configured Hugging Face repo:
 ```
@@ -65,8 +64,8 @@ https://huggingface.co/{repo}/resolve/main/{model_name}
 ```
 
 **Cache location**: Store the downloaded model at the standard whisper.cpp cache path. Do NOT require the user to manage model files. The application handles download + caching transparently.
-- Linux/macOS: `~/.cache/whisper/{model_name}`
-- Windows: `%LOCALAPPDATA%/whisper/{model_name}`
+- Linux/WSL/macOS: `~/.cache/whisper/{model_name}`
+- Windows NOT supported
 
 If download fails, error with a message including the URL. Partial downloads must not be left in the cache directory — use a `.part` suffix during download and atomically rename on completion.
 
@@ -83,8 +82,8 @@ fuck, shit, damn, bitch, dick, cunt, bastard, asshole
 "Partial match" means the transcribed word text contains the target word as a substring (case-insensitive). For example, "fucking" matches "fuck", "dammit" matches "damn".
 
 Each matched segment yields a `BleepPosition` with:
-- `start_time` (seconds, from whisper timestamp)
-- `end_time` (seconds, from whisper timestamp)
+- `start_time` (milliseconds, from whisper timestamp)
+- `end_time` (milliseconds, from whisper timestamp)
 
 ### 5. Encoding + muxing pass
 
@@ -120,27 +119,3 @@ no-swear/
 ├── README.md            # Build + run instructions
 └── .gitignore
 ```
-
-## README.md contents
-
-Must include:
-- Brief description of what the tool does
-- Prerequisites: Rust toolchain, FFmpeg libraries (libavformat, libavcodec, libavutil, libswresample) installed on the system
-- Build command: `cargo build --release`
-- Usage example with `--help` output
-- Note that the model is auto-downloaded on first run
-- Works with any media file libav can demux
-- License (Apache 2.0, matching original)
-
-## What is explicitly excluded from MVP
-
-- Subtitle-guided optimization (no SRT parsing)
-- Language selection (always English)
-- GPU flag (auto-detect not implemented — CPU only)
-- `--words` flag (hardcoded word list)
-- `--bleep-volume` / `--original-volume` flags
-- `--buffer` flag
-- `--copy-all-audio` flag
-- Match mode selection (always partial)
-- Progress reporting
-- Parallel processing
