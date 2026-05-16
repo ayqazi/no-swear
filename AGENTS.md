@@ -1,8 +1,8 @@
-This is the `no-swear` app - a Rust command-line tool to censor swear words from a selected audio track in a media file. It uses ffmpeg and a whisper model to replace swear words with white noise.
+This is the `no-swear` app - a command-line tool to censor swear words from a selected audio track in a media file. It uses ffmpeg and a whisper model to replace swear words with non-swearing filler.
 
-Running description in `README.md`, code in `src/`, entry point in `src/main.rs`
+Python project managed with `uv`, runnable with `uvx`.
 
-`no-swear.spec.md` defines its behavior
+`no-swear.spec.md` defines its behavior.
 
 - NEVER glob or grep the whole repository. You must explore from shallow to deep and only glob, grep, or read small focused slices of the codebase. Be token efficient.
 - `no-swear.spec.md` is a full declaration of behavior.
@@ -12,9 +12,8 @@ Running description in `README.md`, code in `src/`, entry point in `src/main.rs`
   - It must never be rewritten - only surgical edits and tweaks for consistency are allowed.
   - It must NEVER be edited unless specifically instructed to.
 - NEVER create abstractions unless they clearly make readability easier. Linear code describing an algorithm or process is preferred. Repeat yourself twice, factor out abstractions on the third use.
-- NEVER factor out short, simple code that is near-impossible get wrong (this overrides the previous rule)
-- Expect ffmpeg tools to be available; stop and display an error if you cannot run them
-- ffmpeg-next docs: `agents/rs-ffmpeg-next.md`
-- Use data/swearing-clip.mkv to test all changes; if not found, no hunting for media - just show user an error
-- Create test files with timestamped names in `<REPO_ROOT>/tmp/`; NEVER search for existing files in `<REPO_ROOT>/tmp/` unless specifically told to.
-- ALWAYS run no-swear with `--verbose` and `RUST_BACKTRACE=1` so you have all diagnostic information available.
+- NEVER factor out short, simple code that is near-impossible get wrong (this overrides the previous rule).
+- Expect ffmpeg tools to be available; stop and display an error if you cannot run them.
+- Use `data/swearing-clip.mkv` to test all changes; if not found, no hunting for media - just show user an error.
+- System temp directory `/tmp` is BANNED. Use `scratch/` directory in the repo for all temporary files.
+- ALWAYS run no-swear with `--verbose`.

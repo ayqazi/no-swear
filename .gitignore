@@ -1,4 +1,5 @@
-/target/
-/tmp/
-/.env
+*.pyi
+__pycache__/
+/scratch/
 /data/
+/out/

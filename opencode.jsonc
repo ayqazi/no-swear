@@ -18,7 +18,7 @@
       "git rm *": "deny",
       "git cherry-pick *": "deny",
       "rm *": "deny",
-      "mv *": "deny"
+      "rm scratch/*": "allow"
     }
   },
   "mcp": {

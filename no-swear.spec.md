@@ -1,8 +1,8 @@
-# No-Swear — MVP Specification
+# No-Swear-NG — MVP Specification
 
 ## Overview
 
-A CLI tool that censors profanity in any media file (video or audio) by replacing matching words with brown noise. Uses libav (via `ffmpeg-next`) for all media operations and whisper.cpp (via `whisper-rs`) for speech-to-text.
+A CLI tool that censors profanity in any media file (video or audio) by replacing matching words with brown noise. Uses ffmpeg for all media operations and a speech-to-text engine for transcription.
 
 ## CLI Interface
 
@@ -14,16 +14,16 @@ no-swear input.mkv output.mkv --audio 1
 
 | Position | Name | Description |
 |----------|------|-------------|
-| 1 | `input` | Path to input media file (any format libav can demux) |
+| 1 | `input` | Path to input media file (any format ffmpeg can demux) |
 | 2 | `output` | Path to output media file |
 
 ### Flags
 
 | Flag | Required | Description |
 |------|----------|-------------|
-| `--audio <N>` | Yes | Audio stream index to censor (0-based). Passed directly to libav stream selection. User is trusted to pick an English track. |
-| `--model-name <NAME>` | No | Model filename to use from the Hugging Face repo (default: `ggml-tiny.en-q5_1.bin`) |
-| `--model-repo <REPO>` | No | Hugging Face repo to download the model from (default: `ggerganov/whisper.cpp`) |
+| `--audio <N>` | Yes | Audio stream index to censor (0-based). User is trusted to pick an English track. |
+| `--model <NAME>` | No | Speech-to-text model to use (default: `tiny.en`). The application manages download and caching transparently. |
+| `--precision <TYPE>` | No | Model precision at load time (default: `int8`). Supported values depend on the speech-to-text engine. |
 | `--verbose` | No | Increase output verbosity |
 
 ### Error conditions
@@ -32,47 +32,26 @@ no-swear input.mkv output.mkv --audio 1
 - `--audio` stream index does not exist → error listing available streams
 - `--audio` stream exists but is not audio (e.g., video) → error
 - Output file cannot be written → error
-
-## Dependencies (Cargo.toml)
-
-| Crate | Version | Purpose |
-|-------|---------|---------|
-| `clap` | latest | CLI argument parsing (positional + flags) |
-| `ffmpeg-next` | latest | libav bindings: demux, decode, encode, resample, mux, stream copy |
-| `whisper-rs` | latest | whisper.cpp bindings: load GGML model, transcribe PCM audio |
-| `rand` | latest | Generate noise samples |
-| `reqwest` | latest | HTTP client for model download (blocking) |
+- Speech-to-text model cannot be loaded or downloaded → error with message
+- Output cannot be encoded (no suitable audio encoder available) → error with message
 
 ## Behaviour
 
 ### 1. Argument parsing
 
-Parse two positional args (`input`, `output`) and one flag (`--audio`). Validate all error conditions before proceeding.
+Parse two positional args (`input`, `output`) and flags (`--audio`, `--model`, `--precision`). Validate all error conditions before proceeding.
 
-### 2. Open input
+### 2. Audio extraction
 
-Open `input` via `ffmpeg-next`. Identify all streams:
-- The selected audio stream (index from `--audio`)
-- All other streams (video, subtitles, other audio tracks)
+Extract the selected audio stream resampled to the format expected by the speech-to-text engine (mono, 16 kHz).
 
 ### 3. Model loading
 
-Load `whisper-rs` with a GGML format model. The model name and Hugging Face repo are configurable via `--model-name` and `--model-repo` flags (defaults listed above).
+Load the configured speech-to-text model. The application manages download and caching transparently. If the model cannot be acquired, error with a message.
 
-**Model acquisition**: The application must download the model file on first use if not already present. Use `reqwest` to download from the configured Hugging Face repo:
-```
-https://huggingface.co/{repo}/resolve/main/{model_name}
-```
+### 4. Transcription
 
-**Cache location**: Store the downloaded model at the standard whisper.cpp cache path. Do NOT require the user to manage model files. The application handles download + caching transparently.
-- Linux/WSL/macOS: `~/.cache/whisper/{model_name}`
-- Windows NOT supported
-
-If download fails, error with a message including the URL. Partial downloads must not be left in the cache directory — use a `.part` suffix during download and atomically rename on completion.
-
-### 4. Transcription pass
-
-Decode the selected audio stream in its entirety to raw PCM samples. Resample to 16kHz mono (whisper.cpp requirement). Feed the full PCM buffer to `whisper-rs` with word-level timestamps enabled.
+Transcribe the extracted audio with the speech-to-text engine, requesting word-level timestamps.
 
 Collect all word-level timestamp segments where the transcribed text partially matches any word in the hardcoded default list:
 
@@ -83,40 +62,28 @@ fuck, shit, damn, bitch, dick, cunt, bastard, asshole
 "Partial match" means the transcribed word text contains the target word as a substring (case-insensitive). For example, "fucking" matches "fuck", "dammit" matches "damn".
 
 Each matched segment yields a `BleepPosition` with:
-- `start_time` (milliseconds, from whisper timestamp)
-- `end_time` (milliseconds, from whisper timestamp)
+- `start_time` (seconds, from speech-to-text timestamp)
+- `end_time` (seconds, from speech-to-text timestamp)
 
-### 5. Encoding + muxing pass
+### 5. Noise generation
 
-Create the output file with the same container format as the input.
+Create a replacement audio file that is identical to the original selected audio stream except that the time ranges matching each `BleepPosition` are overwritten with brown noise.
 
-For each stream in the input:
+**Brown noise application**: For each `BleepPosition`, replace the audio samples in that time range with brown noise (random walk / integrated white noise) at approximately 1/35th the amplitude of the surrounding dialog (~0.023 of full scale). Samples outside bleep ranges pass through unmodified. Brown noise is generated per-channel (independent noise for each channel) if the audio has multiple channels.
 
-| Stream type | Handling |
-|-------------|----------|
-| Video | Stream copy (passthrough, no re-encode) |
-| Subtitles | Stream copy (passthrough, no re-encode) |
-| Attachments / data | Stream copy (passthrough, no re-encode) |
-| Audio (not selected) | Stream copy (passthrough, no re-encode) |
-| Audio (selected) | Decode → apply brown noise → encode as AAC |
+### 6. Output assembly
 
-**Brown noise application**: For each `BleepPosition`, replace the audio samples in that time range with brown noise (random walk / integrated white noise) at approximately 1/35th the amplitude of the surrounding dialog (~0.023 of full scale). Samples outside bleep ranges pass through unmodified. Brown noise is generated per-channel (independent noise for each channel).
+Assemble the output file using the processed audio and all original non-selected streams (video, subtitles, attachments, other audio tracks). All non-selected streams pass through without re-encoding. The output container format matches the input. If the output cannot be assembled because no suitable audio encoder is available, error with a message.
 
-**AAC encoding**: Use libav's AAC encoder (`AV_CODEC_ID_AAC`). Bitrate: 640 kbps (Blu-ray quality). If the AAC encoder is not available in the libav build, error with a message.
+### 7. Cleanup
 
-**Muxing**: Interleave all output streams (copied + re-encoded audio) into the output container. Use the same format context as the input.
-
-### 6. Cleanup
-
-Close all libav contexts. The model file remains cached for future runs.
+All temporary artifacts are cleaned up.
 
 ## Directory layout
 
 ```
 no-swear/
-├── Cargo.toml
-├── src/
-│   └── main.rs          # Single source file — all logic here
-├── README.md            # Build + run instructions
+├── no-swear          # Executable
+├── README.md         # Run instructions
 └── .gitignore
 ```
