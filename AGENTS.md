@@ -1,6 +1,16 @@
+This is the `no-swear` app - a Rust command-line tool to censor swear words from a selected audio track in a media file. It uses ffmpeg and a whisper model to replace swear words with white noise.
+
+Running description in `README.md`, code in `src/`, entry point in `src/main.rs`
+
+`no-swear.spec.md` defines its behavior
+
 - NEVER glob or grep the whole repository. You must explore from shallow to deep and only glob, grep, or read small focused slices of the codebase. Be token efficient.
-- All spec.md files are meant to be full declarations of behavior with only important technical details. They must be in timeless, version-less language and must never be rewritten - only surgical edits and tweaks for consistency are allowed.
-  - NEVER edit them unless specifically told to
+- `no-swear.spec.md` is a full declaration of behavior.
+  - Technical details must only be included if they are non-negotiable constraints.
+  - It must be in timeless, version-less language with no reference to past versions.
+  - It must be standalone, not depend on other files unless specifically instructed to, and should in theory allow the app to be built from scratch.
+  - It must never be rewritten - only surgical edits and tweaks for consistency are allowed.
+  - It must NEVER be edited unless specifically instructed to.
 - NEVER create abstractions unless they clearly make readability easier. Linear code describing an algorithm or process is preferred. Repeat yourself twice, factor out abstractions on the third use.
 - NEVER factor out short, simple code that is near-impossible get wrong (this overrides the previous rule)
 - Expect ffmpeg tools to be available; stop and display an error if you cannot run them
