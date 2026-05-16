@@ -27,6 +27,173 @@ struct Args {
         help = "Hugging Face repo to download the model from"
     )]
     model_repo: String,
+
+    #[arg(long, help = "Increase output verbosity")]
+    verbose: bool,
+}
+
+struct CensoringPosition {
+    word: String,
+    start_ms: i64,
+    end_ms: i64,
+}
+
+fn extract_audio(
+    ictx: &mut ffmpeg::format::context::Input,
+    audio_stream_index: usize,
+    verbose: bool,
+) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+    if verbose {
+        eprintln!("Opening audio decoder for stream {}", audio_stream_index);
+    }
+    let stream = ictx.stream(audio_stream_index).ok_or("audio stream not found")?;
+    let context = ffmpeg::codec::context::Context::from_parameters(stream.parameters())?;
+    let mut decoder = context.decoder().audio()?;
+
+    let src_layout = decoder.channel_layout();
+    let src_rate = decoder.rate();
+    let src_format = decoder.format();
+
+    if verbose {
+        eprintln!("Source audio: format={:?} rate={} layout={:?}", src_format, src_rate, src_layout);
+    }
+
+    let dst_format = ffmpeg::util::format::Sample::F32(ffmpeg::util::format::sample::Type::Packed);
+    let dst_layout = ffmpeg::channel_layout::ChannelLayout::MONO;
+    let dst_rate = 16000;
+
+    if verbose {
+        eprintln!("Creating resampler ({} channels -> mono, {} Hz -> 16 kHz)", src_layout.channels(), src_rate);
+    }
+    let mut resampler = ffmpeg::software::resampling::context::Context::get(
+        src_format,
+        src_layout,
+        src_rate,
+        dst_format,
+        dst_layout,
+        dst_rate,
+    )?;
+
+    let mut pcm_buffer: Vec<f32> = Vec::new();
+    let dst_channel_layout = dst_layout;
+
+    for (pkt_stream, packet) in ictx.packets() {
+        if pkt_stream.index() != audio_stream_index {
+            continue;
+        }
+        decoder.send_packet(&packet)?;
+        let mut frame = ffmpeg::frame::Audio::empty();
+        while decoder.receive_frame(&mut frame).is_ok() {
+            let mut dst = ffmpeg::frame::Audio::empty();
+            resampler.run(&frame, &mut dst)?;
+            let data = dst.data(0);
+            let count = dst.samples();
+            if count > 0 {
+                let samples: &[f32] = unsafe {
+                    std::slice::from_raw_parts(data.as_ptr() as *const f32, count)
+                };
+                pcm_buffer.extend_from_slice(samples);
+            }
+        }
+    }
+
+    if verbose {
+        eprintln!("Draining decoder (flush)");
+    }
+    decoder.send_packet(&ffmpeg::packet::Packet::empty())?;
+    let mut frame = ffmpeg::frame::Audio::empty();
+    while decoder.receive_frame(&mut frame).is_ok() {
+        let mut dst = ffmpeg::frame::Audio::empty();
+        resampler.run(&frame, &mut dst)?;
+        let data = dst.data(0);
+        let count = dst.samples();
+        if count > 0 {
+            let samples: &[f32] = unsafe {
+                std::slice::from_raw_parts(data.as_ptr() as *const f32, count)
+            };
+            pcm_buffer.extend_from_slice(samples);
+        }
+    }
+
+    if verbose {
+        eprintln!("Flushing resampler");
+    }
+    loop {
+        let mut dst = ffmpeg::frame::Audio::empty();
+        unsafe { dst.alloc(dst_format, 4096, dst_channel_layout); }
+        let delay = resampler.flush(&mut dst)?;
+        if delay.is_none() {
+            break;
+        }
+        let data = dst.data(0);
+        let count = dst.samples();
+        if count > 0 {
+            let samples: &[f32] = unsafe {
+                std::slice::from_raw_parts(data.as_ptr() as *const f32, count)
+            };
+            pcm_buffer.extend_from_slice(samples);
+        }
+    }
+
+    if pcm_buffer.is_empty() {
+        return Err("No audio samples decoded - empty PCM buffer".into());
+    }
+
+    if verbose {
+        eprintln!("Decoded {} PCM samples ({:.1}s at 16 kHz)", pcm_buffer.len(), pcm_buffer.len() as f64 / 16000.0);
+    }
+
+    Ok(pcm_buffer)
+}
+
+fn transcribe(
+    pcm_buffer: &[f32],
+    state: &mut whisper_rs::WhisperState,
+    verbose: bool,
+) -> Result<Vec<CensoringPosition>, Box<dyn std::error::Error>> {
+    let mut params = whisper_rs::FullParams::new(whisper_rs::SamplingStrategy::Greedy { best_of: 5 });
+    params.set_token_timestamps(true);
+    params.set_split_on_word(true);
+    params.set_n_threads(4);
+    params.set_print_progress(false);
+    params.set_print_realtime(false);
+    params.set_print_special(false);
+    params.set_language(Some("en"));
+
+    if verbose {
+        eprintln!("Running whisper transcription on {:.1}s of audio", pcm_buffer.len() as f64 / 16000.0);
+    }
+
+    state.full(params, pcm_buffer)?;
+
+    if verbose {
+        eprintln!("Transcription complete, {} segments", state.full_n_segments());
+    }
+
+    let mut censored = Vec::new();
+    let swear_words = ["fuck", "shit", "damn", "bitch", "dick", "cunt", "bastard", "asshole"];
+    let n_segments = state.full_n_segments();
+    for i in 0..n_segments {
+        let segment = state.get_segment(i).ok_or("failed to get segment")?;
+        let text = segment.to_str()?.to_lowercase();
+        for &word in &swear_words {
+            if text.contains(word) {
+                let t0 = segment.start_timestamp() * 10;
+                let t1 = segment.end_timestamp() * 10;
+                censored.push(CensoringPosition {
+                    word: word.to_string(),
+                    start_ms: t0,
+                    end_ms: t1,
+                });
+            }
+        }
+    }
+
+    if verbose {
+        eprintln!("Found {} swear word occurrences to censor", censored.len());
+    }
+
+    Ok(censored)
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -39,7 +206,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!("Input file does not exist: {}", args.input).into());
     }
 
-    let ictx = ffmpeg::format::input(&args.input)?;
+    let mut ictx = ffmpeg::format::input(&args.input)?;
 
     let nb_streams = ictx.nb_streams() as usize;
     if args.audio >= nb_streams {
@@ -83,6 +250,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let model_path = ensure_model(&args.model_name, &args.model_repo)?;
     println!("Using model: {}", model_path.display());
+
+    let whisper_ctx = whisper_rs::WhisperContext::new_with_params(
+        &model_path,
+        whisper_rs::WhisperContextParameters::default(),
+    )?;
+    let mut whisper_state = whisper_ctx.create_state()?;
+
+    let pcm_buffer = extract_audio(&mut ictx, args.audio, args.verbose)?;
+
+    let censored = transcribe(&pcm_buffer, &mut whisper_state, args.verbose)?;
+
+    if args.verbose {
+        for pos in &censored {
+            eprintln!("CENSORED {} {}:{}", pos.word, pos.start_ms, pos.end_ms);
+        }
+    }
+
+    if args.verbose {
+        eprintln!("Seeking input back to start for passthrough");
+    }
+    ictx.seek(0, ..0)?;
 
     passthrough(ictx, &args.output)?;
 

@@ -24,6 +24,7 @@ no-swear input.mkv output.mkv --audio 1
 | `--audio <N>` | Yes | Audio stream index to censor (0-based). Passed directly to libav stream selection. User is trusted to pick an English track. |
 | `--model-name <NAME>` | No | Model filename to use from the Hugging Face repo (default: `ggml-tiny.en-q5_1.bin`) |
 | `--model-repo <REPO>` | No | Hugging Face repo to download the model from (default: `ggerganov/whisper.cpp`) |
+| `--verbose` | No | Increase output verbosity |
 
 ### Error conditions
 
