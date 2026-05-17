@@ -171,7 +171,11 @@ The output container format is inferred from the output filename extension, matc
 
 ### Temporary files
 
-All intermediate WAV files are created in a temporary directory (e.g., `tempfile.mkdtemp()`) and cleaned up on completion. The only persistent artifact is the cached model.
+All intermediate WAV files are created in a temporary directory created using `tempfile.mkdtemp()`. The directory name is output to STDERR.
+
+### Logs
+
+Logs are stored in the `logs/` subdirectory of the temporary directory and are verbose by default, containing all debugging information. Tight massively iterated loops omit detailed logging to avoid performance degradation.
 
 ### Model management
 
