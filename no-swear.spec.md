@@ -24,7 +24,6 @@ no-swear input.mkv output.mkv --audio 1
 | `--audio <N>` | Yes | Audio stream index to censor (0-based). User is trusted to pick an English track. |
 | `--model <NAME>` | No | Speech-to-text model to use (default: `tiny.en`). The application manages download and caching transparently. |
 | `--precision <TYPE>` | No | Model precision at load time (default: `int8`). Supported values depend on the speech-to-text engine. |
-| `--verbose` | No | Increase output verbosity |
 
 ### Error conditions
 
