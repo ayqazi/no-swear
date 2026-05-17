@@ -1,16 +1,8 @@
 # No-Swear-NG — Python Implementation Specification
 
-## Rationale
+## Summary
 
-The Rust prototype (`no-swear`, using `ffmpeg-next` + `whisper-rs`) proved that direct libav bindings and raw BPE-token-level whisper access force reimplementation of mature, stable functionality already available at the CLI level and in Python libraries.
-
-**Key problems with the Rust approach:**
-- ffmpeg-next (libav bindings) requires manual demuxing, decoding, resampling, encoding, and muxing — thousands of lines of battle-tested C code that ffmpeg's own CLI already exposes perfectly.
-- whisper-rs exposes raw BPE tokens, not decoded words. Recombining subword tokens into whole words for swear-word matching requires duplicating whisper.cpp's own detokenization logic.
-- Word-level timestamps — a built-in feature of the Python `faster-whisper` library — require manual DTW alignment reimplementation in Rust.
-
-**Python approach:**
-- Use `ffmpeg` CLI via `subprocess` for all media operations. No C bindings, no library integration bugs.
+- Use `ffmpeg-python` for all media operations. No C bindings, no library integration bugs.
 - Use `faster-whisper` for transcription. It provides word-level timestamps (`word_timestamps=True`) out of the box, including BPE token recombination and CTranslate2-accelerated inference. 2–4x faster than openai-whisper.
 - The tradeoff: intermediate audio is stored as uncompressed WAV files (~10 MB/minute for mono 16 kHz 16-bit). This is acceptable for typical media files (<2 hours). Lossless compression (e.g., FLAC) can be used to reduce disk usage if needed — decompress to raw PCM in memory before processing.
 
@@ -20,32 +12,17 @@ The Rust prototype (`no-swear`, using `ffmpeg-next` + `whisper-rs`) proved that 
 |------------|---------|---------|
 | `faster-whisper` | latest | Speech-to-text with word-level timestamps and CTranslate2 acceleration. Handles BPE token recombination and model download/caching transparently. |
 | `ctranslate2` | latest | Inference engine for Transformer models (faster-whisper dependency, included automatically). |
-| `ffmpeg` (CLI) | system | Audio extraction, resampling, remuxing. Invoked via `subprocess`. |
+| `ffmpeg-python` | latest | Python wrapper around ffmpeg CLI for audio extraction, resampling, remuxing. |
 | `numpy` | latest | PCM sample manipulation, noise generation. |
-| (standard library) | — | `subprocess`, `argparse`, `tempfile`, `os`, `json` |
+| (standard library) | — | `argparse`, `tempfile`, `os`, `json` |
 
 ## Architecture
 
 The pipeline has three phases with two intermediate WAV files:
 
-```
-input.mkv
-   │
-   ▼
-Phase 1: Extract ───► 16 kHz mono WAV  ──► faster_whisper.transcribe(word_timestamps=True)
-                        (for STT)                  │
-                                                   ▼
-                                           List of BleepPosition
-                                           (word, start_sec, end_sec)
-                                                   │
-                                                   ▼
-Phase 2: Generate ───► Processed WAV   ◄── numpy: copy input WAV samples,
-                        (noise applied)     overwrite bleep ranges with brown noise
-                                                   │
-                                                   ▼
-Phase 3: Remux ───► output.mkv
-               ffmpeg -map 0 -map -0:a -map 1:a -c copy
-```
+Phase 1: Extract selected audio → 16 kHz mono WAV → faster-whisper transcribe → list of BleepPositions (word, start_sec, end_sec).
+Phase 2: Copy input WAV samples, overwrite bleep ranges with brown noise → processed WAV.
+Phase 3: Remux original container replacing the selected audio stream with processed WAV, copy all other streams.
 
 ## Detailed Behaviour
 
@@ -53,38 +30,12 @@ Phase 3: Remux ───► output.mkv
 
 #### 1a. Extract audio for transcription
 
-Run ffmpeg to extract the selected audio stream to a 16 kHz mono 16-bit PCM WAV file:
-
-```
-ffmpeg -y -i <input> -map 0:a:<audio_idx> -ac 1 -ar 16000 -sample_fmt s16 <stt_wav>
-```
+Extract the selected audio stream to a 16 kHz mono 16-bit PCM WAV file with settings: `map=f'0:a:{audio_idx}'`, `ac=1`, `ar=16000`, `sample_fmt='s16'`.
 
 - If the stream index does not exist, ffmpeg will error. Catch this and show the available streams.
-- If the stream exists but is not audio, ffmpeg will error (it cannot map a non-audio stream with `-map 0:a:N`). Show a clear error.
+- If the stream exists but is not audio, ffmpeg will error (it cannot map a non-audio stream). Show a clear error.
 
-After extraction, load the WAV into memory via numpy/`soundfile` for noise generation. The WAV is transcribed via faster-whisper which reads files from disk.
-
-#### 1b. Transcribe
-
-```python
-from faster_whisper import WhisperModel
-
-model = WhisperModel(model_name, compute_type=precision)  # e.g. "tiny.en", "int8"
-segments, info = model.transcribe(stt_wav, word_timestamps=True)
-```
-
-`segments` is a generator yielding segment objects, each containing `words`:
-
-```python
-for segment in segments:
-    for word in segment.words:
-        # word.word      — "fucking"
-        # word.start     — 1.2 (seconds)
-        # word.end       — 1.5 (seconds)
-        # word.probability — 0.98
-```
-
-Each word is already fully decoded — no BPE token handling needed.
+Load the WAV into memory via numpy/`soundfile` for noise generation. The WAV is transcribed via faster-whisper which reads files from disk.
 
 #### 1c. Match swear words
 
@@ -102,7 +53,7 @@ fuck, shit, damn, bitch, dick, cunt, bastard, asshole
 
 "Partial match" means `normalized_word.contains(swear_word)`. Examples:
 - "fucking" → "fuck" → match
-- "dammit" → "damn" → match  
+- "dammit" → "damn" → match
 - "bitch" → "bitch" → match
 - "bullshit" → "shit" → match
 - "asshole" → "asshole" → match (but also matches "ass" and "hole" individually if those were in the list — acceptable)
@@ -111,13 +62,7 @@ fuck, shit, damn, bitch, dick, cunt, bastard, asshole
 
 #### 2a. Load the original audio PCM
 
-Read the original selected audio stream at its native sample rate and channel count. This is needed because the output audio must have the same sample rate and channel layout as the input.
-
-Extract the full-resolution audio (not the 16 kHz mono version used for STT):
-
-```
-ffmpeg -y -i <input> -map 0:a:<audio_idx> -acodec pcm_s16le -f wav <full_audio_wav>
-```
+Extract the full-resolution audio (not the 16 kHz mono version used for STT) with settings: `map=f'0:a:{audio_idx}'`, `acodec='pcm_s16le'`, `f='wav'`.
 
 Load the WAV file into a numpy array. If the audio is multi-channel, load as a 2D array (samples × channels).
 
@@ -128,44 +73,15 @@ For each `BleepPosition` (start_sec, end_sec):
 1. Convert to sample indices: `i0 = int(start_sec * sample_rate)`, `i1 = int(end_sec * sample_rate)`.
 2. Generate brown noise for the sample range [i0, i1) for each channel.
 
-**Brown noise algorithm** (per channel):
-
-```python
-max_amp = 0.8 / 35.0  # ~0.02286
-value = 0.0
-for i in range(i0, i1):
-    value += (random.random() - 0.5) * max_amp * 0.125
-    value = max(-max_amp, min(max_amp, value))
-    samples[i, ch] = value
-```
-
-This is a random walk (integrated white noise) clamped to `±max_amp`. The step size `max_amp * 0.125` controls the frequency roll-off — smaller steps produce more low-frequency content.
-
-Each channel gets an independent noise stream.
+**Brown noise algorithm** (per channel): Use a random walk with step size `max_amp * 0.125` where `max_amp = 0.8 / 35.0` (~0.02286). Clamp values to `±max_amp`. Each channel gets an independent noise stream.
 
 #### 2c. Write processed WAV
 
-Write the modified samples back to a WAV file at the original sample rate and channel count.
+Write the modified samples back to a WAV file at the original sample rate and channel count with settings: `acodec='pcm_s16le'`, `f='wav'`.
 
 ### Phase 3: Remuxing
 
-Replace the selected audio stream in the original container with the processed WAV, copying all other streams verbatim:
-
-```
-ffmpeg -y \
-  -i <input> \
-  -i <processed_wav> \
-  -map 0 -map -0:a:<audio_idx> -map 1:a \
-  -c copy \
-  -shortest \
-  <output>
-```
-
-- `-map 0` — select all streams from the original file.
-- `-map -0:a:<audio_idx>` — remove (subtract) the selected audio stream from the original.
-- `-map 1:a` — add the processed audio from the second input (the WAV).
-- `-c copy` — copy all remaining streams without re-encoding (video, subtitles, attachments, other audio tracks).
-- `-shortest` — stop when the shortest stream ends (avoids padding if the WAV is slightly shorter than the original).
+Replace the selected audio stream in the original container with the processed WAV, copying all other streams verbatim with settings: `map=0`, `-map=f'-0:a:{audio_idx}'`, `map=1`, `c='copy'`, `shortest=None`.
 
 The output container format is inferred from the output filename extension, matching the input format. If the output format does not support the input's video codec, `-c copy` will fail — in that case, re-encode video with `libx264` as a fallback, or error with a message.
 
@@ -175,7 +91,22 @@ All intermediate WAV files are created in a temporary directory created using `t
 
 ### Logs
 
-Logs are stored in the `logs/` subdirectory of the temporary directory and are verbose by default, containing all debugging information. Tight massively iterated loops omit detailed logging to avoid performance degradation.
+Logs are stored in the `logs/` subdirectory of the temporary directory. Each subprocess receives its own log file:
+
+**Main log (`main.log`)** — Forensic analysis log containing:
+- Full command-line parameters and configuration
+- Timing information for each pipeline stage (extraction, transcription, noise generation, remuxing)
+- List of all censored words found with start/end timestamps
+- Final results summary
+
+**Subprocess logs** — Separate files for each subprocess:
+- `extract_stt.log` — Audio extraction for transcription (16 kHz mono)
+- `extract_full.log` — Full-resolution audio extraction
+- `remux.log` — Container remuxing with processed audio
+
+**Whisper log (`whisper.log`)** — Separate file containing Whisper operations (model loading, transcription, word-level timestamp processing). This file is excluded from main logs to prevent bloating with thousands of irrelevant lines.
+
+Tight massively iterated loops omit detailed logging to avoid performance degradation.
 
 ### Model management
 
@@ -197,7 +128,7 @@ If model download fails, show an error with a descriptive message.
 | Hallucinated speech | Whisper may hallucinate words in silence. Use `vad_filter=True` or adjust `log_prob_threshold` / `no_speech_threshold` in `transcribe()` to suppress. |
 | Multiple audio streams | Only the selected audio stream is replaced. Other audio streams pass through untouched. |
 | Very long files (>2 hours) | The WAV for a 2-hour 48 kHz stereo 16-bit file is ~2.7 GB. This is manageable on modern systems. For longer files, consider processing in chunks. |
-| Lossless compression | The intermediate WAV can be stored as FLAC to reduce disk usage: `ffmpeg -i <input> -map 0:a:<idx> -acodec flac <temp.flac>`, then decompress in memory with `soundfile.read()` or `ffmpeg -f flac -i <temp.flac> -f s16le -`. This is optional — uncompressed WAV is the default for simplicity. |
+| Lossless compression | The intermediate WAV can be stored as FLAC to reduce disk usage: `ffmpeg-python` with `acodec='flac'`, then decompress in memory with `soundfile.read()`. This is optional — uncompressed WAV is the default for simplicity. |
 | Windows | Not supported. macOS and Linux only. |
 
 ## Invocation
