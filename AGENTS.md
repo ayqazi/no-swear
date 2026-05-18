@@ -17,3 +17,6 @@ Python project managed with `uv`, runnable with `uvx`.
 - Use `data/swearing-clip.mkv` to test all changes; if not found, no hunting for media - just show user an error.
 - System temp directory `/tmp` is BANNED. Use `scratch/` directory in the repo for all temporary files.
 - ALWAYS run no-swear with `--verbose`.
+- ddg MCP rules:
+  - You MUST sleep for at least 5 seconds between each ddg search query or DuckDuckGo temporarily bans our public IP
+  - Get more results rather than few per query (minimum 10) then use the ddg summary tool to find out if each link is worth WebFetching
