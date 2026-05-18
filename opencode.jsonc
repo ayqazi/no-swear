@@ -1,6 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "openrouter/deepseek/deepseek-v4-flash",
+  "model": "openrouter/deepseek/deepseek-v3.2",
   "small_model": "minimax/MiniMax-M2.7",
   "mode": {
     "build": {
