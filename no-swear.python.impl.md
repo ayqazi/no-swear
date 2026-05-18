@@ -87,7 +87,7 @@ The output container format is inferred from the output filename extension, matc
 
 ### Temporary files
 
-All intermediate WAV files are created in a temporary directory created using `tempfile.mkdtemp()`. The directory name is output to STDERR.
+All intermediate WAV files are created in a temporary directory created using `tempfile.mkdtemp()`. The directory name is output to STDERR. For testing, you must set the `TMPDIR` environment variable to the absolute path to the "scratch/" directory of the project root; it will detect this and automatically create log directories there.
 
 ### Logs
 
