@@ -15,10 +15,12 @@
       "git commit *": "deny",
       "git checkout *": "deny",
       "git reset *": "deny",
-      "git rm *": "deny",
+      "git rm*": "deny",
       "git cherry-pick *": "deny",
       "rm *": "deny",
-      "rm scratch/*": "allow"
+      "rm scratch/*": "allow",
+      "rm -r scratch/*": "allow",
+      "rm -fr scratch/*": "allow"
     }
   },
   "mcp": {
