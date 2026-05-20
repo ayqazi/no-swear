@@ -14,7 +14,6 @@
 | `ctranslate2` | latest | Inference engine for Transformer models (faster-whisper dependency, included automatically). |
 | `ffmpeg-python` | latest | Python wrapper around ffmpeg CLI for audio extraction, resampling, remuxing. |
 | `numpy` | latest | PCM sample manipulation, noise generation. |
-| (standard library) | — | `argparse`, `tempfile`, `os`, `json` |
 
 ## Architecture
 
@@ -45,18 +44,12 @@ Iterate over all words across all segments. For each word:
 2. Check if the word contains any swear word as a substring.
 3. If matched, record a `BleepPosition` with the word's `start` and `end` timestamps in seconds.
 
-The swear word list (hardcoded):
-
-```
-fuck, shit, damn, bitch, dick, cunt, bastard, asshole
-```
+The swear word list is provided by the `--words` flag as a comma-separated string. All whitespace is stripped from each word before use.
 
 "Partial match" means `normalized_word.contains(swear_word)`. Examples:
-- "fucking" → "fuck" → match
-- "dammit" → "damn" → match
-- "bitch" → "bitch" → match
-- "bullshit" → "shit" → match
-- "asshole" → "asshole" → match (but also matches "ass" and "hole" individually if those were in the list — acceptable)
+- "we'll" → "we" → match
+- "woman" → "man" → match
+- "right" → "right" → match
 
 ### Phase 2: Brown noise generation
 
@@ -124,12 +117,8 @@ If model download fails, show an error with a descriptive message.
 |-------|----------|
 | Empty audio (no speech) | If no bleep positions are found, the processed WAV is identical to the original. Remux proceeds normally — output is a clean copy. |
 | Bleep range at start/end of audio | Clamp sample indices to valid range `[0, len(samples))`. |
-| Whisper word timestamp drift | Word timestamps from faster-whisper are post-hoc alignments and may be off by 100-300ms. This is acceptable for a bleeping tool — slight over- or under-bleeping is less noticeable than uncensored swears. |
 | Hallucinated speech | Whisper may hallucinate words in silence. Use `vad_filter=True` or adjust `log_prob_threshold` / `no_speech_threshold` in `transcribe()` to suppress. |
 | Multiple audio streams | Only the selected audio stream is replaced. Other audio streams pass through untouched. |
-| Very long files (>2 hours) | The WAV for a 2-hour 48 kHz stereo 16-bit file is ~2.7 GB. This is manageable on modern systems. For longer files, consider processing in chunks. |
-| Lossless compression | The intermediate WAV can be stored as FLAC to reduce disk usage: `ffmpeg-python` with `acodec='flac'`, then decompress in memory with `soundfile.read()`. This is optional — uncompressed WAV is the default for simplicity. |
-| Windows | Not supported. macOS and Linux only. |
 
 ## Invocation
 

@@ -24,6 +24,7 @@ no-swear input.mkv output.mkv --audio 1
 | `--audio <N>` | Yes | Audio stream index to censor (0-based). User is trusted to pick an English track. |
 | `--model <NAME>` | No | Speech-to-text model to use (default: `tiny.en`). The application manages download and caching transparently. |
 | `--precision <TYPE>` | No | Model precision at load time (default: `int8`). Supported values depend on the speech-to-text engine. |
+| `--words <LIST>` | Yes | Comma-separated list of words to censor. Example: `--words cat,dog,fish` |
 
 ### Error conditions
 
@@ -38,7 +39,7 @@ no-swear input.mkv output.mkv --audio 1
 
 ### 1. Argument parsing
 
-Parse two positional args (`input`, `output`) and flags (`--audio`, `--model`, `--precision`). Validate all error conditions before proceeding.
+Parse two positional args (`input`, `output`) and flags (`--audio`, `--model`, `--precision`, `--words`). Validate all error conditions before proceeding.
 
 ### 2. Audio extraction
 
@@ -52,13 +53,9 @@ Load the configured speech-to-text model. The application manages download and c
 
 Transcribe the extracted audio with the speech-to-text engine, requesting word-level timestamps.
 
-Collect all word-level timestamp segments where the transcribed text partially matches any word in the hardcoded default list:
+Collect all word-level timestamp segments where the transcribed text partially matches any word in the word list provided by `--words`. Example: `--words cat,dog,fish`.
 
-```
-fuck, shit, damn, bitch, dick, cunt, bastard, asshole
-```
-
-"Partial match" means the transcribed word text contains the target word as a substring (case-insensitive). For example, "fucking" matches "fuck", "dammit" matches "damn".
+"Partial match" means the transcribed word text contains the target word as a substring (case-insensitive). For example, "woman" matches "man", "we'll" matches "we".
 
 Each matched segment yields a `BleepPosition` with:
 - `start_time` (seconds, from speech-to-text timestamp)
@@ -73,16 +70,3 @@ Create a replacement audio file that is identical to the original selected audio
 ### 6. Output assembly
 
 Assemble the output file using the processed audio and all original non-selected streams (video, subtitles, attachments, other audio tracks). All non-selected streams pass through without re-encoding. The output container format matches the input. If the output cannot be assembled because no suitable audio encoder is available, error with a message.
-
-### 7. Cleanup
-
-All temporary artifacts are cleaned up.
-
-## Directory layout
-
-```
-no-swear/
-├── no-swear          # Executable
-├── README.md         # Run instructions
-└── .gitignore
-```
