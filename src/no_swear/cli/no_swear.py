@@ -1,44 +1,9 @@
 import argparse
-import datetime
-import os
 import sys
 import tempfile
+from pathlib import Path
 
-
-_SEVERITIES = frozenset({"ERROR", "WARN", "INFO"})
-
-
-def _now() -> str:
-    return datetime.datetime.now().astimezone().isoformat(timespec="milliseconds")
-
-
-def _open_log(path: str, mode: str = "a"):
-    try:
-        return open(path, mode, encoding="utf-8")
-    except OSError as e:
-        print(f"ERROR {_now()} log_failed  path={path}, error={e}  Cannot open log file", file=sys.stderr)
-        sys.exit(1)
-
-
-def _log(log_file, severity: str, event: str, params: dict | None = None, text: str = ""):
-    if severity not in _SEVERITIES:
-        severity = "INFO"
-    parts = [severity, _now(), event]
-    if params:
-        parts.append(", ".join(f"{k}={v}" for k, v in params.items()))
-    if text:
-        parts.append(text)
-    log_file.write("  ".join(parts) + "\n")
-    log_file.flush()
-
-
-def _log_dir(tmpdir: str) -> str:
-    return os.path.join(tmpdir, "logs")
-
-
-def _setup_logging(log_dir: str):
-    os.makedirs(log_dir, exist_ok=True)
-    return _open_log(os.path.join(log_dir, "main.log"))
+from no_swear.cli.logging import Logger
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -53,29 +18,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def validate_args(args: argparse.Namespace) -> list[str]:
     failures: list[str] = []
-    if not os.path.isfile(args.input):
+    input_path = Path(args.input)
+    if not input_path.is_file():
         failures.append("input_not_found")
-    o_dir = os.path.dirname(args.output)
-    if o_dir and not os.path.isdir(o_dir):
+    output_path = Path(args.output)
+    o_dir = output_path.parent
+    if str(o_dir) and not o_dir.is_dir():
         failures.append("output_dir_invalid")
     if args.audio < 0:
         failures.append("invalid_audio_index")
     return failures
 
 
-def phase_parse_and_validate(argv: list[str] | None, log_file) -> argparse.Namespace | None:
+def phase_parse_and_validate(argv: list[str] | None, logger: Logger) -> argparse.Namespace | None:
     args = parse_args(argv)
     errors = validate_args(args)
     if errors:
-        _log(log_file, "ERROR", "validation_failed", {"errors": ",".join(errors)}, "Argument validation failed, pipeline aborted")
+        logger.error("validation_failed", {"errors": ",".join(errors)}, "Argument validation failed, pipeline aborted")
         return None
-    _log(log_file, "INFO", "args_parsed",
-         {"input": args.input, "output": args.output, "audio": args.audio, "model": args.model, "precision": args.precision},
-         "Arguments parsed and validated")
+    logger.info("args_parsed",
+                {"input": args.input, "output": args.output, "audio": args.audio, "model": args.model, "precision": args.precision},
+                "Arguments parsed and validated")
     return args
 
 
-def phase_extract_stt(audio_idx: int, out_wav: str):
+def phase_extract_stt(audio_idx: int, out_wav: Path):
     pass
 
 
@@ -83,7 +50,7 @@ def phase_load_model(model: str, precision: str):
     pass
 
 
-def phase_transcribe(wav_path: str):
+def phase_transcribe(wav_path: Path):
     pass
 
 
@@ -91,11 +58,11 @@ def phase_match_swear_words(segments, wordlist: frozenset):
     return []
 
 
-def phase_extract_fullres(audio_idx: int, out_wav: str):
+def phase_extract_fullres(audio_idx: int, out_wav: Path):
     pass
 
 
-def phase_load_pcm(wav_path: str):
+def phase_load_pcm(wav_path: Path):
     return None
 
 
@@ -103,26 +70,25 @@ def phase_generate_noise(samples, bleeps, sample_rate: int, channels: int):
     return None
 
 
-def phase_write_processed(samples, sample_rate: int, channels: int, out_wav: str):
+def phase_write_processed(samples, sample_rate: int, channels: int, out_wav: Path):
     pass
 
 
-def phase_remux(container_path: str, audio_idx: int, processed_wav: str, output_path: str):
+def phase_remux(container_path: Path, audio_idx: int, processed_wav: Path, output_path: Path):
     pass
 
 
 def main(argv: list[str] | None = None):
-    tmpdir = tempfile.mkdtemp(prefix="no_swear_")
-    print(tmpdir, file=sys.stderr)
-    log_dir = _log_dir(tmpdir)
-    log_file = _setup_logging(log_dir)
+    workdir = Path(tempfile.mkdtemp(prefix="no_swear_"))
+    print(workdir, file=sys.stderr)
+    logger = Logger(workdir)
 
-    args = phase_parse_and_validate(argv, log_file)
+    args = phase_parse_and_validate(argv, logger)
     if args is None:
         sys.exit(1)
 
-    _log(log_file, "INFO", "pipeline_placeholder",
-         {"input": args.input, "output": args.output, "audio": args.audio, "model": args.model, "precision": args.precision},
-         "Pipeline invoked")
+    logger.info("pipeline_placeholder",
+                {"input": args.input, "output": args.output, "audio": args.audio, "model": args.model, "precision": args.precision},
+                "Pipeline invoked")
 
-    log_file.close()
+    logger.close()

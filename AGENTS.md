@@ -23,7 +23,7 @@ This is the `no-swear` app - a command-line tool to censor swear words from a se
 # no-swear instructions
 
 - It is a Python project managed with `uv`, runnable with `uvx`.
-- `no-swear.spec.md` defines its behavior (can be partial if being iterated upon)
+- `no-swear.spec.md` defines the behavior goal.
 - Run in dev mode with `uv run no-swear`.
 - `no-swear` MUST use tempfile package and NEVER manage temp files/dirs manually; trust the `tempfile` functions to choose the correct place.
-  - Always set `TMPDIR` environment variable to `scratch/` in the project root - the `tempfile` functions can be trusted to then create files/directories in `scratch/`
+  - Always set `TMPDIR` environment variable to the absolute path of the `scratch/` directory - the `tempfile` module will create all temp files and dirs relative to it; this is TRUSTED behavior. Assume it works.

@@ -78,28 +78,23 @@ Replace the selected audio stream in the original container with the processed W
 
 The output container format is inferred from the output filename extension, matching the input format. If the output format does not support the input's video codec, `-c copy` will fail — in that case, re-encode video with `libx264` as a fallback, or error with a message.
 
-### Temporary files
+### Working directory
 
-All intermediate WAV files are created in a temporary directory created using `tempfile.mkdtemp()`. The directory name is output to STDERR. For testing, you must set the `TMPDIR` environment variable to the absolute path to the "scratch/" directory of the project root; it will detect this and automatically create log directories there.
+All intermediate WAV files are created in a working directory created using `tempfile.mkdtemp()`. The working directory path is output to STDERR.
 
 ### Logs
 
-Logs are stored in the `logs/` subdirectory of the temporary directory. Each subprocess receives its own log file:
+Logs are stored in the `logs/` subdirectory of the working directory. The main process and each subprocess have separate log files.
 
-**Main log (`main.log`)** — Forensic analysis log containing:
+Main log contains forensic analysis info containing:
 - Full command-line parameters and configuration
-- Timing information for each pipeline stage (extraction, transcription, noise generation, remuxing)
+- Timing information, and relative log filename, for each pipeline stage (extraction, transcription, noise generation, remuxing)
 - List of all censored words found with start/end timestamps
 - Final results summary
 
-**Subprocess logs** — Separate files for each subprocess:
-- `extract_stt.log` — Audio extraction for transcription (16 kHz mono)
-- `extract_full.log` — Full-resolution audio extraction
-- `remux.log` — Container remuxing with processed audio
+Each sub-process that is spawned must have its own log file.
 
-**Whisper log (`whisper.log`)** — Separate file containing Whisper operations (model loading, transcription, word-level timestamp processing). This file is excluded from main logs to prevent bloating with thousands of irrelevant lines.
-
-Tight massively iterated loops omit detailed logging to avoid performance degradation.
+All whisper output MUST go to a separate log file.
 
 ### Model management
 
