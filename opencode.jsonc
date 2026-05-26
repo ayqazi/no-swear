@@ -1,6 +1,12 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "lsp": true,
+  "lsp": {
+    "pyright": {"disabled": true},
+    "uv-pyright": {
+      "extensions": [".py", ".pyi"],
+      "command": ["uv", "run", "pyright-langserver",  "--stdio"]
+    }
+  },
   "model": "openrouter/deepseek/deepseek-v4-flash",
   "small_model": "openrouter/minimax/minimax-m2.7",
   "mode": {
