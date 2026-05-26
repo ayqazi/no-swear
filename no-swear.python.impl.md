@@ -28,9 +28,9 @@ Phase 3: Remux original container replacing the selected audio stream with proce
 
 #### 1a. Extract audio
 
-Extract the selected audio stream to a separate file with `c='copy'` preserving original format.
+Extract the selected audio stream to a separate file with `c='copy'` preserving original format. Write to a `.mka` file in working directory.
 
-#### 1c. Match swear words
+#### 1b. Match swear words
 
 Iterate over all words across all segments. For each word:
 
