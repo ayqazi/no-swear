@@ -31,7 +31,6 @@ no-swear input.mkv output.mkv --audio 1
 - `input` does not exist → error with message
 - `--audio` stream index does not exist → error
 - `--audio` stream exists but is not audio (e.g., video) → error
-- Output file cannot be written → error
 - Speech-to-text model cannot be loaded or downloaded → error with message
 - Output cannot be encoded (ffmpeg reports failure) → error
 

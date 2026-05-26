@@ -27,7 +27,7 @@ class Logger:
             return open(path, "a", encoding="utf-8")
         except OSError as e:
             print(f"ERROR {now()} log_failed  path={path}, error={e}  Cannot open log file", file=sys.stderr)
-            sys.exit(1)
+            raise
 
     def error(self, event: str, params: dict | None = None, text: str = ""):
         self.log("ERROR", event, params, text)

@@ -2,7 +2,12 @@
 name = "no-swear"
 version = "0.1.0"
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "faster-whisper",
+    "ffmpeg-python",
+    "numpy",
+    "soundfile",
+]
 
 [project.scripts]
 no-swear = "no_swear.cli.no_swear:main"
