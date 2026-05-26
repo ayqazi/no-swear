@@ -29,7 +29,7 @@ no-swear input.mkv output.mkv --audio 1
 ### Error conditions
 
 - `input` does not exist → error with message
-- `--audio` stream index does not exist → error listing available streams
+- `--audio` stream index does not exist → error
 - `--audio` stream exists but is not audio (e.g., video) → error
 - Output file cannot be written → error
 - Speech-to-text model cannot be loaded or downloaded → error with message
@@ -43,7 +43,7 @@ Parse two positional args (`input`, `output`) and flags (`--audio`, `--model`, `
 
 ### 2. Audio extraction
 
-Extract the selected audio stream resampled to the format expected by the speech-to-text engine (mono, 16 kHz).
+Extract the selected audio stream to a separate file.
 
 ### 3. Model loading
 

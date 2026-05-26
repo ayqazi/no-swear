@@ -4,7 +4,6 @@
 
 - Use `ffmpeg-python` for all media operations. No C bindings, no library integration bugs.
 - Use `faster-whisper` for transcription. It provides word-level timestamps (`word_timestamps=True`) out of the box, including BPE token recombination and CTranslate2-accelerated inference. 2–4x faster than openai-whisper.
-- The tradeoff: intermediate audio is stored as uncompressed WAV files (~10 MB/minute for mono 16 kHz 16-bit). This is acceptable for typical media files (<2 hours). Lossless compression (e.g., FLAC) can be used to reduce disk usage if needed — decompress to raw PCM in memory before processing.
 
 ## Dependencies
 
@@ -17,24 +16,19 @@
 
 ## Architecture
 
-The pipeline has three phases with two intermediate WAV files:
+The pipeline has three phases with one intermediate audio file:
 
-Phase 1: Extract selected audio → 16 kHz mono WAV → faster-whisper transcribe → list of BleepPositions (word, start_sec, end_sec).
-Phase 2: Copy input WAV samples, overwrite bleep ranges with brown noise → processed WAV.
-Phase 3: Remux original container replacing the selected audio stream with processed WAV, copy all other streams.
+Phase 1: Extract selected audio → faster-whisper transcribe → list of BleepPositions (word, start_sec, end_sec).
+Phase 2: Load extracted audio, overwrite bleep ranges with brown noise → processed audio.
+Phase 3: Remux original container replacing the selected audio stream with processed audio, copy all other streams.
 
 ## Detailed Behaviour
 
 ### Phase 1: Audio extraction and transcription
 
-#### 1a. Extract audio for transcription
+#### 1a. Extract audio
 
-Extract the selected audio stream to a 16 kHz mono 16-bit PCM WAV file with settings: `map=f'0:a:{audio_idx}'`, `ac=1`, `ar=16000`, `sample_fmt='s16'`.
-
-- If the stream index does not exist, ffmpeg will error. Catch this and show the available streams.
-- If the stream exists but is not audio, ffmpeg will error (it cannot map a non-audio stream). Show a clear error.
-
-Load the WAV into memory via numpy/`soundfile` for noise generation. The WAV is transcribed via faster-whisper which reads files from disk.
+Extract the selected audio stream to a separate file with `c='copy'` preserving original format.
 
 #### 1c. Match swear words
 
@@ -53,11 +47,9 @@ The swear word list is provided by the `--words` flag as a comma-separated strin
 
 ### Phase 2: Brown noise generation
 
-#### 2a. Load the original audio PCM
+#### 2a. Load audio into memory
 
-Extract the full-resolution audio (not the 16 kHz mono version used for STT) with settings: `map=f'0:a:{audio_idx}'`, `acodec='pcm_s16le'`, `f='wav'`.
-
-Load the WAV file into a numpy array. If the audio is multi-channel, load as a 2D array (samples × channels).
+Load the extracted audio file with `soundfile` into a numpy array. If the audio is multi-channel, load as a 2D array (samples × channels).
 
 #### 2b. Generate brown noise replacement
 
@@ -68,19 +60,19 @@ For each `BleepPosition` (start_sec, end_sec):
 
 **Brown noise algorithm** (per channel): Use a random walk with step size `max_amp * 0.125` where `max_amp = 0.8 / 35.0` (~0.02286). Clamp values to `±max_amp`. Each channel gets an independent noise stream.
 
-#### 2c. Write processed WAV
+#### 2c. Write processed audio
 
-Write the modified samples back to a WAV file at the original sample rate and channel count with settings: `acodec='pcm_s16le'`, `f='wav'`.
+Write the modified samples back to an audio file at the original sample rate and channel.
 
 ### Phase 3: Remuxing
 
-Replace the selected audio stream in the original container with the processed WAV, copying all other streams verbatim with settings: `map=0`, `-map=f'-0:a:{audio_idx}'`, `map=1`, `c='copy'`, `shortest=None`.
+Replace the selected audio stream in the original container with the processed audio, copying all other streams verbatim with settings.
 
-The output container format is inferred from the output filename extension, matching the input format. If the output format does not support the input's video codec, `-c copy` will fail — in that case, re-encode video with `libx264` as a fallback, or error with a message.
+The output container format is inferred from the output filename extension.
 
 ### Working directory
 
-All intermediate WAV files are created in a working directory created using `tempfile.mkdtemp()`. The working directory path is output to STDERR.
+All intermediate files are created in a working directory created using `tempfile.mkdtemp()`. The working directory path is output to STDERR. Working directory is created and output after all error checking and immediately before work is ready to begin.
 
 ### Logs
 
@@ -110,7 +102,7 @@ If model download fails, show an error with a descriptive message.
 
 | Issue | Handling |
 |-------|----------|
-| Empty audio (no speech) | If no bleep positions are found, the processed WAV is identical to the original. Remux proceeds normally — output is a clean copy. |
+| Empty audio (no speech) | If no bleep positions are found, the processed audio is identical to the original. Remux proceeds normally — output is a clean copy. |
 | Bleep range at start/end of audio | Clamp sample indices to valid range `[0, len(samples))`. |
 | Hallucinated speech | Whisper may hallucinate words in silence. Use `vad_filter=True` or adjust `log_prob_threshold` / `no_speech_threshold` in `transcribe()` to suppress. |
 | Multiple audio streams | Only the selected audio stream is replaced. Other audio streams pass through untouched. |
@@ -118,5 +110,5 @@ If model download fails, show an error with a descriptive message.
 ## Invocation
 
 ```
-uvx --from git+https://github.com/ayqazi/no-swear no-swear
+uv run no-swear
 ```
