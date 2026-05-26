@@ -58,7 +58,7 @@ For each `BleepPosition` (start_sec, end_sec):
 1. Convert to sample indices: `i0 = int(start_sec * sample_rate)`, `i1 = int(end_sec * sample_rate)`.
 2. Generate brown noise for the sample range [i0, i1) for each channel.
 
-**Brown noise algorithm** (per channel): Use a random walk with step size `max_amp * 0.125` where `max_amp = 0.8 / 35.0` (~0.02286). Clamp values to `±max_amp`. Each channel gets an independent noise stream.
+**Brown noise algorithm** (per channel): Use a random walk with step size `max_amp * 0.125` where `max_amp = 0.023`. Clamp values to `±max_amp`. Each channel gets an independent noise stream.
 
 #### 2c. Write processed audio
 

@@ -65,7 +65,7 @@ Each matched segment yields a `BleepPosition` with:
 
 Create a replacement audio file that is identical to the original selected audio stream except that the time ranges matching each `BleepPosition` are overwritten with brown noise.
 
-**Brown noise application**: For each `BleepPosition`, replace the audio samples in that time range with brown noise (random walk / integrated white noise) at approximately 1/35th the amplitude of the surrounding dialog (~0.023 of full scale). Samples outside bleep ranges pass through unmodified. Brown noise is generated per-channel (independent noise for each channel) if the audio has multiple channels.
+**Brown noise application**: For each `BleepPosition`, replace the audio samples in that time range with brown noise (random walk / integrated white noise) at an amplitude that is barely audible under normal speech. Samples outside bleep ranges pass through unmodified. Brown noise is generated per-channel (independent noise for each channel) if the audio has multiple channels.
 
 ### 6. Output assembly
 
