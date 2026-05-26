@@ -7,12 +7,12 @@
 
 ## Dependencies
 
-| Dependency | Version | Purpose |
-|------------|---------|---------|
-| `faster-whisper` | latest | Speech-to-text with word-level timestamps and CTranslate2 acceleration. Handles BPE token recombination and model download/caching transparently. |
-| `ctranslate2` | latest | Inference engine for Transformer models (faster-whisper dependency, included automatically). |
-| `ffmpeg-python` | latest | Python wrapper around ffmpeg CLI for audio extraction, resampling, remuxing. |
-| `numpy` | latest | PCM sample manipulation, noise generation. |
+| Dependency | Version |
+|------------|---------|
+| `faster-whisper` | latest |
+| `ffmpeg-python` | latest |
+| `numpy` | latest |
+| `soundfile` | latest |
 
 ## Architecture
 
@@ -58,7 +58,7 @@ For each `BleepPosition` (start_sec, end_sec):
 1. Convert to sample indices: `i0 = int(start_sec * sample_rate)`, `i1 = int(end_sec * sample_rate)`.
 2. Generate brown noise for the sample range [i0, i1) for each channel.
 
-**Brown noise algorithm** (per channel): Use a random walk with step size `max_amp * 0.125` where `max_amp = 0.023`. Clamp values to `±max_amp`. Each channel gets an independent noise stream.
+**Brown noise algorithm** (per channel): Use a random walk with step size `max_amp * 0.125` where `max_amp = 0.8 / 35.0` (~0.02286). Clamp values to `±max_amp`. Each channel gets an independent noise stream.
 
 #### 2c. Write processed audio
 
@@ -68,7 +68,7 @@ Write the modified samples back to an audio file at the original sample rate and
 
 Replace the selected audio stream in the original container with the processed audio, copying all other streams verbatim with settings.
 
-The output container format is inferred from the output filename extension.
+The output container format is inferred by ffmpeg from the output file extension.
 
 ### Working directory
 
@@ -110,5 +110,5 @@ If model download fails, show an error with a descriptive message.
 ## Invocation
 
 ```
-uv run no-swear
+uv run no-swear input.mkv output.mkv --words cat,dog --audio 1
 ```

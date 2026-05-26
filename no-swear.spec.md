@@ -24,7 +24,7 @@ no-swear input.mkv output.mkv --audio 1
 | `--audio <N>` | Yes | Audio stream index to censor (0-based). User is trusted to pick an English track. |
 | `--model <NAME>` | No | Speech-to-text model to use (default: `tiny.en`). The application manages download and caching transparently. |
 | `--precision <TYPE>` | No | Model precision at load time (default: `int8`). Supported values depend on the speech-to-text engine. |
-| `--words <LIST>` | Yes | Comma-separated list of words to censor. Example: `--words cat,dog,fish` |
+| `--words <LIST>` | Yes | Comma-separated list of words to censor. Whitespace around words is ignored. Example: `--words cat,dog,fish` |
 
 ### Error conditions
 
@@ -33,7 +33,7 @@ no-swear input.mkv output.mkv --audio 1
 - `--audio` stream exists but is not audio (e.g., video) → error
 - Output file cannot be written → error
 - Speech-to-text model cannot be loaded or downloaded → error with message
-- Output cannot be encoded (no suitable audio encoder available) → error with message
+- Output cannot be encoded (ffmpeg reports failure) → error
 
 ## Behaviour
 
@@ -69,4 +69,4 @@ Create a replacement audio file that is identical to the original selected audio
 
 ### 6. Output assembly
 
-Assemble the output file using the processed audio and all original non-selected streams (video, subtitles, attachments, other audio tracks). All non-selected streams pass through without re-encoding. The output container format matches the input. If the output cannot be assembled because no suitable audio encoder is available, error with a message.
+Assemble the output file using the processed audio and all original non-selected streams (video, subtitles, attachments, other audio tracks). All non-selected streams pass through without re-encoding. All streams retain their original stream index (position) in the output. The output container is inferred by ffmpeg by output file extension. If the output cannot be assembled because no suitable audio encoder is available, error with a message.
