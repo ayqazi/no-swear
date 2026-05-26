@@ -6,19 +6,20 @@ This is the `no-swear` app - a command-line tool to censor swear words from a se
 - `no-swear.spec.md` is a full declaration of behavior.
   - Technical details must only be included if they are non-negotiable constraints.
   - It must be in timeless, version-less language with no reference to past versions.
-  - It must be standalone, not depend on other files unless specifically instructed to, and should in theory allow the app to be built from scratch.
+  - It must be standalone, not depend on other files unless specifically instructed to, and should in theory allow the app to be built from a blank slate.
   - It must never be rewritten - only surgical edits and tweaks for consistency are allowed.
   - It must NEVER be edited unless specifically instructed to.
 - NEVER create abstractions unless they clearly make readability easier. Linear code describing an algorithm or process is preferred. Repeat yourself twice, factor out abstractions on the third use.
 - NEVER factor out short, simple code that is near-impossible get wrong (this overrides the previous rule).
 - Expect ffmpeg tools to be available; stop and display an error if you cannot run them.
 - Use `data/swearing-clip.mkv` to test all changes; if not found, no hunting for media - just show user an error.
-- System temp directory `/tmp` is BANNED. Use `scratch/` directory in the repo for all temporary files.
+- System temp directory `/tmp` is BANNED. Use `scratch/` directory in the repo for all temporary files. list/grep/glob or other tools will NOT find files there, you must use bash cli.
 - ALWAYS run no-swear with `--verbose`.
 - ddg MCP rules:
   - You MUST sleep for at least 5 seconds between each ddg search query or DuckDuckGo temporarily bans our public IP
   - Get more results rather than few per query (minimum 10) then use the ddg summary tool to find out if each link is worth WebFetching
 - Lint: `uvx ruff check` or `uvx ruff check <FILE>`
+- `rm` is disabled. You must only use `trash` with `-s` flag: `trash -s FILE_OR_DIR [FILE_OR_DIR...]`
 
 # no-swear instructions
 
