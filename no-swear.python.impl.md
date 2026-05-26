@@ -104,7 +104,8 @@ If model download fails, show an error with a descriptive message.
 |-------|----------|
 | Empty audio (no speech) | If no bleep positions are found, the processed audio is identical to the original. Remux proceeds normally — output is a clean copy. |
 | Bleep range at start/end of audio | Clamp sample indices to valid range `[0, len(samples))`. |
-| Hallucinated speech | Whisper may hallucinate words in silence. Use `vad_filter=True` or adjust `log_prob_threshold` / `no_speech_threshold` in `transcribe()` to suppress. |
+| Hallucinated speech | Whisper may hallucinate words in silence. Adjust `log_prob_threshold` / `no_speech_threshold` in `transcribe()` to suppress. |
+| VAD issues | VAD causes softly spoken words to be missed. Don't use it. |
 | Multiple audio streams | Only the selected audio stream is replaced. Other audio streams pass through untouched. |
 
 ## Invocation

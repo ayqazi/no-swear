@@ -98,7 +98,7 @@ def transcribe(whisper: WhisperModel, audio_path: Path, logger: Logger) -> list:
     t0 = time.perf_counter()
     whisper_log_path = logger.workdir / "logs" / "whisper.log"
     try:
-        segments, info = whisper.transcribe(str(audio_path), word_timestamps=True, vad_filter=True)
+        segments, info = whisper.transcribe(str(audio_path), word_timestamps=True)
         seg_list = list(segments)
     except Exception as e:
         elapsed = time.perf_counter() - t0
