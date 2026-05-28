@@ -3,17 +3,14 @@ This is the `no-swear` app - a command-line tool to censor swear words from a se
 # General instructions
 
 - NEVER glob or grep the whole repository. You must explore from shallow to deep and only glob, grep, or read small focused slices of the codebase. Be token efficient.
-- `no-swear.spec.md` is a full declaration of behavior.
-  - Technical details must only be included if they are non-negotiable constraints.
-  - It must be in timeless, version-less language with no reference to past versions.
-  - It must be standalone, not depend on other files unless specifically instructed to, and should in theory allow the app to be built from a blank slate.
-  - It must never be rewritten - only surgical edits and tweaks for consistency are allowed.
-  - It must NEVER be edited unless specifically instructed to.
-- NEVER create abstractions unless they clearly make readability easier. Linear code describing an algorithm or process is preferred. Repeat yourself twice, factor out abstractions on the third use.
+- NEVER create abstractions unless they clearly make readability easier.
+- Linear code describing an algorithm or process is preferred.
+- Repeat yourself twice, factor out abstractions on the third use.
 - NEVER factor out short, simple code that is near-impossible get wrong (this overrides the previous rule).
 - Expect ffmpeg tools to be available; stop and display an error if you cannot run them.
 - Use `data/swearing-clip.mkv` to test all changes; if not found, no hunting for media - just show user an error.
-- System temp directory `/tmp` is BANNED. Use `scratch/` directory in the repo for all temporary files. list/grep/glob or other tools will NOT find files there, you must use bash cli.
+- System temp directory `/tmp` is BANNED. Use `scratch/` directory in the repo for all temporary and files. list/grep/glob or other tools will NOT find files there, you must use bash cli.
+- All temporary or output files must have a 6 character alphanumeric component for disambiguiation.
 - ALWAYS run no-swear with `--verbose`.
 - ddg MCP rules:
   - You MUST sleep for at least 5 seconds between each ddg search query or DuckDuckGo temporarily bans our public IP
@@ -24,7 +21,6 @@ This is the `no-swear` app - a command-line tool to censor swear words from a se
 # no-swear instructions
 
 - It is a Python project managed with `uv`, runnable with `uvx`.
-- `no-swear.spec.md` defines the behavior goal.
 - Run in dev mode with `uv run no-swear`.
 - `no-swear` MUST use tempfile package and NEVER manage temp files/dirs manually; trust the `tempfile` functions to choose the correct place.
   - Always set `TMPDIR` environment variable to the absolute path of the `scratch/` directory - the `tempfile` module will create all temp files and dirs relative to it; this is TRUSTED behavior. Assume it works.
