@@ -16,11 +16,13 @@ This is the `no-swear` app - a command-line tool to censor swear words from a se
 - Lint: `uvx ruff check` or `uvx ruff check <FILE>`
 - `rm` is disabled. You must only use `trash` with `-s` flag: `trash -s FILE_OR_DIR [FILE_OR_DIR...]`
 - Only use POSIX command
+
 # no-swear instructions
 
-- It is a Python project managed with `uv`, runnable with `uvx`.
+- It is a Python project managed with `uv`.
 - Run in dev mode with `uv run no-swear`.
+- All code is in `no_swear` Python module, located at `src/no_swear` (`src` project layout).
 - `no-swear` MUST use tempfile package and NEVER manage temp files/dirs manually; trust the `tempfile` functions to choose the correct place.
   - Always set `TMPDIR` environment variable to the absolute path of the `scratch/` directory - the `tempfile` module will create all temp files and dirs relative to it; this is TRUSTED behavior. Assume it works.
-- Use `data/swearing-clip.mkv` (simple 5-minute clip for a quick test) and `data/jurassic-world.2025.15-clip.mkv` (15 minute 4k multi-audio clip final comprehensive test) to test all changes.
-- You will use the following "fake" swear words for censorship: jesus, out, all, sergeant. No real swear words must appear in your context.
+- Use `data/swearing-clip.mkv` (simple 5-minute clip for a quick test - audio stream index 1) and `data/jurassic-world.2025.15-clip.mkv` (15 minute 4k multi-audio clip final comprehensive test, audio stream index 2) to test all changes.
+- You will use the following "fake" swear words for censorship: "jesus", "out", "all", "sergeant", "brother", "dinosaur" (6 words). No real swear words must appear in your context.
