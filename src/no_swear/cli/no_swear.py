@@ -67,7 +67,7 @@ def extract_audio(audio_idx: int, input_path: Path, audio_path: Path, logger: Lo
         elapsed = time.perf_counter() - t0
         stderr_text = e.stderr.decode("utf-8", errors="replace") if e.stderr else ""
         logger.error("extract_audio_failed",
-                     {"elapsed_sec": f"{elapsed:.3f}", "stderr": stderr_text[:500]},
+                     {"elapsed_sec": f"{elapsed:.3f}"},
                      f"Audio extraction failed, ffmpeg error: {stderr_text}")
         raise
     elapsed = time.perf_counter() - t0
