@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import ffmpeg
+import numpy as np
+import soundfile as sf
 from faster_whisper import WhisperModel
 
 from .logging import Logger
@@ -136,18 +138,95 @@ def match_censored_words(segments, wordlist: frozenset, logger: Logger) -> list[
     return bleeps
 
 
-def assemble_output(input_path: Path, output_path: Path, logger: Logger):
+def generate_noise(bleeps: list[BleepPosition], audio_path: Path, processed_path: Path, logger: Logger):
+    t0 = time.perf_counter()
+    wav_path = audio_path.with_suffix(".wav")
+    try:
+        in_file = ffmpeg.input(str(audio_path))
+        decode = ffmpeg.output(in_file, str(wav_path), **{"c": "pcm_s16le"})
+        ffmpeg.run(decode, overwrite_output=True, capture_stdout=True, capture_stderr=True)
+    except ffmpeg.Error as e:
+        elapsed = time.perf_counter() - t0
+        stderr_text = e.stderr.decode("utf-8", errors="replace") if e.stderr else ""
+        logger.error("decode_audio_failed",
+                     {"elapsed_sec": f"{elapsed:.3f}"},
+                     f"Audio decode failed: {stderr_text}")
+        raise
+
+    samples, sr = sf.read(str(wav_path))
+    if samples.ndim == 1:
+        samples = samples.reshape(-1, 1)
+
+    max_amp = 0.8 / 35.0
+    step_size = max_amp * 0.125
+
+    for bp in bleeps:
+        i0 = max(0, int(bp.start_sec * sr))
+        i1 = min(len(samples), int(bp.end_sec * sr))
+        length = i1 - i0
+        if length <= 0:
+            continue
+        n_channels = samples.shape[1]
+        steps = np.random.uniform(-step_size, step_size, (length, n_channels))
+        noise = np.clip(np.cumsum(steps, axis=0), -max_amp, max_amp)
+        samples[i0:i1] = noise.astype(samples.dtype)
+        logger.info("noise_applied",
+                    {"word": bp.word, "start_sec": f"{bp.start_sec:.3f}", "end_sec": f"{bp.end_sec:.3f}",
+                     "i0": str(i0), "i1": str(i1), "samples": str(length)})
+
+    if samples.shape[1] == 1:
+        samples = samples.ravel()
+
+    sf.write(str(processed_path), samples, sr)
+    elapsed = time.perf_counter() - t0
+    logger.info("generate_noise_complete",
+                {"elapsed_sec": f"{elapsed:.3f}", "bleeps_processed": str(len(bleeps))})
+
+
+def assemble_output(input_path: Path, processed_audio_path: Path, output_path: Path, audio_idx: int, logger: Logger):
     t0 = time.perf_counter()
     try:
-        in_file = ffmpeg.input(str(input_path))
-        out_file = ffmpeg.output(in_file, str(output_path), **{"c": "copy", "map": "0"})
+        probe = ffmpeg.probe(str(input_path))
+        probe_streams = probe.get("streams", [])
+
+        orig = ffmpeg.input(str(input_path))
+        proc = ffmpeg.input(str(processed_audio_path))
+
+        stream_objects = []
+        codec_opts = {}
+        v_count = a_count = s_count = 0
+
+        for i, s in enumerate(probe_streams):
+            if i == audio_idx:
+                stream_objects.append(proc["a:0"])
+                codec_opts[f"c:a:{a_count}"] = "aac"
+                orig_bitrate = probe_streams[audio_idx].get("bit_rate")
+                if orig_bitrate:
+                    codec_opts[f"b:a:{a_count}"] = str(orig_bitrate)
+                a_count += 1
+            else:
+                st = s["codec_type"]
+                if st == "video":
+                    stream_objects.append(orig[f"v:{v_count}"])
+                    codec_opts[f"c:v:{v_count}"] = "copy"
+                    v_count += 1
+                elif st == "audio":
+                    stream_objects.append(orig[f"a:{a_count}"])
+                    codec_opts[f"c:a:{a_count}"] = "copy"
+                    a_count += 1
+                elif st == "subtitle":
+                    stream_objects.append(orig[f"s:{s_count}"])
+                    codec_opts[f"c:s:{s_count}"] = "copy"
+                    s_count += 1
+
+        out_file = ffmpeg.output(*stream_objects, str(output_path), **codec_opts)
         out, err = ffmpeg.run(out_file, overwrite_output=True, capture_stdout=True, capture_stderr=True)
     except ffmpeg.Error as e:
         elapsed = time.perf_counter() - t0
         stderr_text = e.stderr.decode("utf-8", errors="replace") if e.stderr else ""
         print(f"ffmpeg error:\n{stderr_text}", file=sys.stderr)
         logger.error("assemble_output_failed",
-                     {"elapsed_sec": f"{elapsed:.3f}", "stderr": stderr_text[:500]},
+                     {"elapsed_sec": f"{elapsed:.3f}", "stderr": stderr_text},
                      "Output assembly failed")
         raise
     elapsed = time.perf_counter() - t0
@@ -182,9 +261,10 @@ def main(argv: list[str] | None = None):
     segments = transcribe(whisper, audio_path, logger)
     bleeps = match_censored_words(segments, wordlist, logger)
 
-    # TODO: Placeholder for censoring words from audio
+    processed_audio = workdir / "processed.wav"
+    generate_noise(bleeps, audio_path, processed_audio, logger)
 
-    assemble_output(input_path, output_path, logger)
+    assemble_output(input_path, processed_audio, output_path, args.audio, logger)
 
     logger.info("pipeline_complete", {"bleeps_found": str(len(bleeps))})
     logger.close()
