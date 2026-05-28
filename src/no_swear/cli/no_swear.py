@@ -146,7 +146,7 @@ def generate_noise(bleeps: list[BleepPosition], audio_path: Path, processed_path
     wav_path = audio_path.with_suffix(".wav")
     try:
         in_file = ffmpeg.input(str(audio_path))
-        decode = ffmpeg.output(in_file, str(wav_path), **{"c": "pcm_s16le"})
+        decode = ffmpeg.output(in_file, str(wav_path), **{"c": "pcm_s16le", "ac": "2"})
         ffmpeg.run(decode, overwrite_output=True, capture_stdout=True, capture_stderr=True)
     except ffmpeg.Error as e:
         elapsed = time.perf_counter() - t0
@@ -218,10 +218,6 @@ def assemble_output(input_path: Path, processed_audio_path: Path, output_path: P
                     stream_objects.append(orig[f"v:{v_count}"])
                     codec_opts[f"c:v:{v_count}"] = "copy"
                     v_count += 1
-                elif st == "audio":
-                    stream_objects.append(orig[f"a:{a_count}"])
-                    codec_opts[f"c:a:{a_count}"] = "copy"
-                    a_count += 1
                 elif st == "subtitle":
                     stream_objects.append(orig[f"s:{s_count}"])
                     codec_opts[f"c:s:{s_count}"] = "copy"
