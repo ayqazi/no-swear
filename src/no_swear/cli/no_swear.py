@@ -223,6 +223,14 @@ def assemble_output(input_path: Path, processed_audio_path: Path, output_path: P
                     codec_opts[f"c:s:{s_count}"] = "copy"
                     s_count += 1
 
+        src_audio_type_idx = sum(1 for s in probe_streams[:audio_idx] if s["codec_type"] == "audio")
+        codec_opts["map_metadata"] = "0"
+        codec_opts["map_metadata:s:a:0"] = f"0:s:a:{src_audio_type_idx}"
+        if v_count:
+            codec_opts["map_metadata:s:v:0"] = "0:s:v:0"
+        for i in range(s_count):
+            codec_opts[f"map_metadata:s:s:{i}"] = f"0:s:s:{i}"
+
         out_file = ffmpeg.output(*stream_objects, str(output_path), **codec_opts)
         out, err = ffmpeg.run(out_file, overwrite_output=True, capture_stdout=True, capture_stderr=True)
     except ffmpeg.Error as e:
