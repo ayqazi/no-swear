@@ -12,6 +12,9 @@ from faster_whisper import WhisperModel
 
 from .logging import Logger
 
+CENSORED_PAD_START_SEC = 0.01
+CENSORED_PAD_END_SEC = 0.01
+
 
 @dataclass
 class BleepPosition:
@@ -159,16 +162,21 @@ def generate_noise(bleeps: list[BleepPosition], audio_path: Path, processed_path
 
     max_amp = 0.8 / 35.0
     step_size = max_amp * 0.125
+    leak = 0.003
 
     for bp in bleeps:
-        i0 = max(0, int(bp.start_sec * sr))
-        i1 = min(len(samples), int(bp.end_sec * sr))
+        i0 = max(0, int((bp.start_sec - CENSORED_PAD_START_SEC) * sr))
+        i1 = min(len(samples), int((bp.end_sec + CENSORED_PAD_END_SEC) * sr))
         length = i1 - i0
         if length <= 0:
             continue
         n_channels = samples.shape[1]
         steps = np.random.uniform(-step_size, step_size, (length, n_channels))
-        noise = np.clip(np.cumsum(steps, axis=0), -max_amp, max_amp)
+        noise = np.empty((length, n_channels), dtype=np.float64)
+        state = np.zeros((1, n_channels), dtype=np.float64)
+        for i in range(length):
+            state = (1.0 - leak) * state + steps[i : i + 1]
+            noise[i] = state
         samples[i0:i1] = noise.astype(samples.dtype)
         logger.info("noise_applied",
                     {"word": bp.word, "start_sec": f"{bp.start_sec:.3f}", "end_sec": f"{bp.end_sec:.3f}",
