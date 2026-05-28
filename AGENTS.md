@@ -8,19 +8,19 @@ This is the `no-swear` app - a command-line tool to censor swear words from a se
 - Repeat yourself twice, factor out abstractions on the third use.
 - NEVER factor out short, simple code that is near-impossible get wrong (this overrides the previous rule).
 - Expect ffmpeg tools to be available; stop and display an error if you cannot run them.
-- Use `data/swearing-clip.mkv` to test all changes; if not found, no hunting for media - just show user an error.
 - System temp directory `/tmp` is BANNED. Use `scratch/` directory in the repo for all temporary and files. list/grep/glob or other tools will NOT find files there, you must use bash cli.
 - All temporary or output files must have a 6 character alphanumeric component for disambiguiation.
-- ALWAYS run no-swear with `--verbose`.
 - ddg MCP rules:
   - You MUST sleep for at least 5 seconds between each ddg search query or DuckDuckGo temporarily bans our public IP
   - Get more results rather than few per query (minimum 10) then use the ddg summary tool to find out if each link is worth WebFetching
 - Lint: `uvx ruff check` or `uvx ruff check <FILE>`
 - `rm` is disabled. You must only use `trash` with `-s` flag: `trash -s FILE_OR_DIR [FILE_OR_DIR...]`
-
+- Only use POSIX command
 # no-swear instructions
 
 - It is a Python project managed with `uv`, runnable with `uvx`.
 - Run in dev mode with `uv run no-swear`.
 - `no-swear` MUST use tempfile package and NEVER manage temp files/dirs manually; trust the `tempfile` functions to choose the correct place.
   - Always set `TMPDIR` environment variable to the absolute path of the `scratch/` directory - the `tempfile` module will create all temp files and dirs relative to it; this is TRUSTED behavior. Assume it works.
+- Use `data/swearing-clip.mkv` (simple 5-minute clip for a quick test) and `data/jurassic-world.2025.15-clip.mkv` (15 minute 4k multi-audio clip final comprehensive test) to test all changes.
+- You will use the following "fake" swear words for censorship: jesus, out, all, sergeant. No real swear words must appear in your context.
