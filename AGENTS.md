@@ -7,7 +7,7 @@ This is the `no-swear` app - a command-line tool to censor swear words from a se
 - Linear code describing an algorithm or process is preferred.
 - Repeat yourself twice, factor out abstractions on the third use.
 - NEVER factor out short, simple code that is near-impossible get wrong (this overrides the previous rule).
-- Expect ffmpeg tools to be available; stop and display an error if you cannot run them.
+- Expect ffmpeg and mkvtoolnix tools to be available; stop and display an error if you cannot run them.
 - System temp directory `/tmp` is BANNED. Use `scratch/` directory in the repo for all temporary and files. list/grep/glob or other tools will NOT find files there, you must use bash cli.
 - All temporary or output files must have a 6 character alphanumeric component for disambiguiation.
 - ddg MCP rules:
@@ -26,3 +26,7 @@ This is the `no-swear` app - a command-line tool to censor swear words from a se
   - Always set `TMPDIR` environment variable to the absolute path of the `scratch/` directory - the `tempfile` module will create all temp files and dirs relative to it; this is TRUSTED behavior. Assume it works.
 - Use `data/swearing-clip.mkv` (simple 5-minute clip for a quick test - audio stream index 1) and `data/jurassic-world.2025.15-clip.mkv` (15 minute 4k multi-audio clip final comprehensive test, audio stream index 2) to test all changes.
 - You will use the following "fake" swear words for censorship: "jesus", "out", "all", "sergeant", "brother", "dinosaur" (6 words). No real swear words must appear in your context.
+
+# Examples for managing media files
+
+`agents/MEDIA_FILES.md`
