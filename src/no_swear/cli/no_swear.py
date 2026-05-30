@@ -33,6 +33,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--model", default="tiny.en", help="Speech-to-text model name")
     p.add_argument("--precision", default="int8", help="Model precision (int8, float16, etc.)")
     p.add_argument("--words", required=True, help="Comma-separated list of words to censor")
+    p.add_argument("--keep", action="store_true", help="Keep intermediate audio files")
     return p.parse_args(argv)
 
 
@@ -193,6 +194,20 @@ def generate_noise(bleeps: list[BleepPosition], audio_path: Path, processed_path
                 {"elapsed_sec": f"{elapsed:.3f}", "bleeps_processed": str(len(bleeps))})
 
 
+def _cleanup_intermediate_files(workdir: Path, logger: Logger):
+    audio_exts = {".mka", ".wav", ".m4a"}
+    files = {}
+    for child in workdir.iterdir():
+        if child.is_file() and child.suffix in audio_exts:
+            files[child.name] = child.stat().st_size
+    if not files:
+        return
+    for child in workdir.iterdir():
+        if child.is_file() and child.suffix in audio_exts:
+            child.unlink()
+    logger.info("intermediate_files_deleted", {"files": str(files)})
+
+
 def main(argv: list[str] | None = None):
     args = parse_args(argv)
     validate_args(args)
@@ -227,4 +242,6 @@ def main(argv: list[str] | None = None):
     assemble(input_path, encoded_audio, output_path, args.audio, probe, logger)
 
     logger.info("pipeline_complete", {"bleeps_found": str(len(bleeps))})
+    if not args.keep:
+        _cleanup_intermediate_files(workdir, logger)
     logger.close()
