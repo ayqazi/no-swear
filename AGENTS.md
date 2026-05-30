@@ -1,4 +1,12 @@
-This is the `no-swear` app - a command-line tool to censor swear words from a selected audio track in a media file. It uses ffmpeg and a whisper model to replace swear words with non-swearing filler.
+This is the `no-swear` app - a command-line tool to censor swear words from a selected audio track in a media file. It uses ffmpeg, mkvmerge, and a whisper model to replace swear words with non-swearing filler.
+
+General logic:
+- extract audio stream, downmixed to and feed to faster-whisper to get censored-word timestamps
+- convert audio stream to a PCM WAV (down-mixed to stereo) and use censored-word timestamps to brown-noise-out censored words in both channels
+- convert censored audio stream to AAC
+- combine back into output media container with ffmpeg or mkvmerge, including the censored audio stream as the only audio stream
+
+Do not glob codebase; all relevant files are pyproject.toml and the Python code under src/no_swear/
 
 # General instructions
 
@@ -15,7 +23,8 @@ This is the `no-swear` app - a command-line tool to censor swear words from a se
   - Get more results rather than few per query (minimum 10) then use the ddg summary tool to find out if each link is worth WebFetching
 - Lint: `uvx ruff check` or `uvx ruff check <FILE>`
 - `rm` is disabled. You must only use `trash` with `-s` flag: `trash -s FILE_OR_DIR [FILE_OR_DIR...]`
-- Only use POSIX command
+- Only use POSIX commands
+- NEVER use subagents without explicit permission
 
 # no-swear instructions
 
