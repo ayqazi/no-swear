@@ -11,6 +11,8 @@ import soundfile as sf
 from faster_whisper import WhisperModel
 
 from .logging import Logger
+from ..encode import encode_to_aac
+from ..package.package import assemble
 
 CENSORED_PAD_START_SEC = 0.01
 CENSORED_PAD_END_SEC = 0.01
@@ -191,65 +193,6 @@ def generate_noise(bleeps: list[BleepPosition], audio_path: Path, processed_path
                 {"elapsed_sec": f"{elapsed:.3f}", "bleeps_processed": str(len(bleeps))})
 
 
-def assemble_output(input_path: Path, processed_audio_path: Path, output_path: Path, audio_idx: int, logger: Logger):
-    t0 = time.perf_counter()
-    try:
-        probe = ffmpeg.probe(str(input_path))
-        probe_streams = probe.get("streams", [])
-
-        orig = ffmpeg.input(str(input_path))
-        proc = ffmpeg.input(str(processed_audio_path))
-
-        stream_objects = []
-        codec_opts = {}
-        v_count = a_count = s_count = 0
-
-        for i, s in enumerate(probe_streams):
-            if i == audio_idx:
-                stream_objects.append(proc["a:0"])
-                codec_opts[f"c:a:{a_count}"] = "aac"
-                orig_bitrate = probe_streams[audio_idx].get("bit_rate")
-                if orig_bitrate:
-                    codec_opts[f"b:a:{a_count}"] = str(orig_bitrate)
-                a_count += 1
-            else:
-                st = s["codec_type"]
-                if st == "video":
-                    stream_objects.append(orig[f"v:{v_count}"])
-                    codec_opts[f"c:v:{v_count}"] = "copy"
-                    v_count += 1
-                elif st == "subtitle":
-                    stream_objects.append(orig[f"s:{s_count}"])
-                    codec_opts[f"c:s:{s_count}"] = "copy"
-                    s_count += 1
-
-        src_audio_type_idx = sum(1 for s in probe_streams[:audio_idx] if s["codec_type"] == "audio")
-        codec_opts["map_metadata"] = "0"
-        codec_opts["map_metadata:s:a:0"] = f"0:s:a:{src_audio_type_idx}"
-        if v_count:
-            codec_opts["map_metadata:s:v:0"] = "0:s:v:0"
-        for i in range(s_count):
-            codec_opts[f"map_metadata:s:s:{i}"] = f"0:s:s:{i}"
-
-        out_file = ffmpeg.output(*stream_objects, str(output_path), **codec_opts)
-        out, err = ffmpeg.run(out_file, overwrite_output=True, capture_stdout=True, capture_stderr=True)
-    except ffmpeg.Error as e:
-        elapsed = time.perf_counter() - t0
-        stderr_text = e.stderr.decode("utf-8", errors="replace") if e.stderr else ""
-        print(f"ffmpeg error:\n{stderr_text}", file=sys.stderr)
-        logger.error("assemble_output_failed",
-                     {"elapsed_sec": f"{elapsed:.3f}", "stderr": stderr_text},
-                     "Output assembly failed")
-        raise
-    elapsed = time.perf_counter() - t0
-    logger.info("assemble_output_complete", {"elapsed_sec": f"{elapsed:.3f}", "output": str(output_path)})
-    sub_log = logger.workdir / "logs" / "assemble_output.log"
-    with open(sub_log, "w") as f:
-        if out:
-            f.write(out.decode("utf-8", errors="replace"))
-        if err:
-            f.write(err.decode("utf-8", errors="replace"))
-
 def main(argv: list[str] | None = None):
     args = parse_args(argv)
     validate_args(args)
@@ -273,10 +216,15 @@ def main(argv: list[str] | None = None):
     segments = transcribe(whisper, audio_path, logger)
     bleeps = match_censored_words(segments, wordlist, logger)
 
-    processed_audio = workdir / "processed.wav"
-    generate_noise(bleeps, audio_path, processed_audio, logger)
+    processed_wav = workdir / "processed.wav"
+    generate_noise(bleeps, audio_path, processed_wav, logger)
 
-    assemble_output(input_path, processed_audio, output_path, args.audio, logger)
+    probe = ffmpeg.probe(str(input_path))
+    orig_bitrate = probe["streams"][args.audio].get("bit_rate")
+    encoded_audio = workdir / "processed.m4a"
+    encode_to_aac(processed_wav, encoded_audio, orig_bitrate, logger)
+
+    assemble(input_path, encoded_audio, output_path, args.audio, probe, logger)
 
     logger.info("pipeline_complete", {"bleeps_found": str(len(bleeps))})
     logger.close()
