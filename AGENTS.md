@@ -14,7 +14,7 @@ Do not glob codebase; all relevant files are pyproject.toml and the Python code 
 - NEVER create abstractions unless they clearly make readability easier.
 - Linear code describing an algorithm or process is preferred.
 - Repeat yourself twice, factor out abstractions on the third use.
-- NEVER factor out short, simple code that is near-impossible get wrong (this overrides the previous rule).
+- NEVER factor out short, simple code that is near-impossible to get wrong (this overrides the previous rule).
 - Expect ffmpeg and mkvtoolnix tools to be available; stop and display an error if you cannot run them.
 - System temp directory `/tmp` is BANNED. Use `scratch/` directory in the repo for all temporary and files. list/grep/glob or other tools will NOT find files there, you must use bash cli.
 - All temporary or output files must have a 6 character alphanumeric component for disambiguiation.
@@ -22,9 +22,9 @@ Do not glob codebase; all relevant files are pyproject.toml and the Python code 
   - You MUST sleep for at least 5 seconds between each ddg search query or DuckDuckGo temporarily bans our public IP
   - Get more results rather than few per query (minimum 10) then use the ddg summary tool to find out if each link is worth WebFetching
 - Lint: `uvx ruff check` or `uvx ruff check <FILE>`
-- `rm` is disabled. You must only use `trash` with `-s` flag: `trash -s FILE_OR_DIR [FILE_OR_DIR...]`
-- Only use POSIX commands
-- NEVER use subagents without explicit permission
+- Agents are NOT allowed to use `rm` on the local host. They must only use `trash` with `-s` flag: `trash -s FILE_OR_DIR [FILE_OR_DIR...]`
+  - This rule does NOT apply to code run by humans (e.g. the no-swear app).
+- Only use POSIX commands.
 
 # no-swear instructions
 
