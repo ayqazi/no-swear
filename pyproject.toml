@@ -4,8 +4,8 @@ version = "0.1.0"
 requires-python = ">=3.14"
 dependencies = [
     "faster-whisper",
-    "ffmpeg-python",
     "numpy",
+    "pyright>=1.1.411",
     "soundfile",
 ]
 
@@ -15,3 +15,7 @@ no-swear = "no_swear.cli.no_swear:main"
 [build-system]
 requires = ["uv_build>=0.11.14,<0.12.0"]
 build-backend = "uv_build"
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"

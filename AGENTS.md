@@ -22,6 +22,7 @@ Do not glob codebase; all relevant files are pyproject.toml and the Python code 
   - You MUST sleep for at least 5 seconds between each ddg search query or DuckDuckGo temporarily bans our public IP
   - Get more results rather than few per query (minimum 10) then use the ddg summary tool to find out if each link is worth WebFetching
 - Lint: `uvx ruff check` or `uvx ruff check <FILE>`
+- Run `uvx pyright` at the end of coding session.
 - Agents are NOT allowed to use `rm` on the local host. They must only use `trash` with `-s` flag: `trash -s FILE_OR_DIR [FILE_OR_DIR...]`
   - This rule does NOT apply to code run by humans (e.g. the no-swear app).
 - Only use POSIX commands.
