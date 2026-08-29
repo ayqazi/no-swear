@@ -24,3 +24,16 @@ The `--model` flag accepts any model name supported by [faster-whisper](https://
 
 Default: `tiny.en`
 Recommended: `medium.en`
+
+## Remote Files
+
+Pass `--remote-host` to process a remote input and write the remote output over
+SSH:
+
+```text
+--remote-host ssh://[USER@]HOST[:PORT]
+```
+
+When enabled, both positional paths are remote paths. The remote account must
+already have non-interactive SSH authentication configured, along with
+`ffmpeg`, `ffprobe`, and `mkvmerge`.

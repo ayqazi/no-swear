@@ -1,247 +1,142 @@
 import argparse
 import sys
 import tempfile
-import time
-from dataclasses import dataclass
 from pathlib import Path
 
-import ffmpeg
-import numpy as np
-import soundfile as sf
-from faster_whisper import WhisperModel
-
+from .. import censor, local_prepare, local_recombine, remote_prepare, remote_recombine
+from ..remote import RemoteHost, parse_remote_host
 from .logging import Logger
-from ..encode import encode_to_aac
-from ..package.package import assemble
-
-CENSORED_PAD_START_SEC = 0.01
-CENSORED_PAD_END_SEC = 0.01
-
-
-@dataclass
-class BleepPosition:
-    word: str
-    start_sec: float
-    end_sec: float
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(prog="no-swear", description="Censor profanity from audio or video files")
-    p.add_argument("input", help="Path to input media file")
-    p.add_argument("output", help="Path to output media file")
-    p.add_argument("--audio", type=int, required=True, help="Audio stream index (0-based)")
-    p.add_argument("--model", default="tiny.en", help="Speech-to-text model name")
-    p.add_argument("--precision", default="int8", help="Model precision (int8, float16, etc.)")
-    p.add_argument("--words", required=True, help="Comma-separated list of words to censor")
-    p.add_argument("--keep", action="store_true", help="Keep intermediate audio files")
-    return p.parse_args(argv)
+    parser = argparse.ArgumentParser(
+        prog="no-swear", description="Censor profanity from audio or video files"
+    )
+    parser.add_argument("input", help="Path to input media file")
+    parser.add_argument("output", help="Path to output media file")
+    parser.add_argument(
+        "--audio", type=int, required=True, help="Audio stream index (0-based)"
+    )
+    parser.add_argument("--model", default="tiny.en", help="Speech-to-text model name")
+    parser.add_argument(
+        "--precision", default="int8", help="Model precision (int8, float16, etc.)"
+    )
+    parser.add_argument(
+        "--words", required=True, help="Comma-separated list of words to censor"
+    )
+    parser.add_argument(
+        "--keep", action="store_true", help="Keep intermediate audio files"
+    )
+    parser.add_argument(
+        "--remote-host",
+        help="SSH host for remote input and output (ssh://[user@]host[:port])",
+    )
+    return parser.parse_args(argv)
 
 
-def validate_args(args: argparse.Namespace):
-    input_path = Path(args.input)
-    if not input_path.is_file():
-        sys.exit("input not found")
-
-    probe = ffmpeg.probe(str(input_path))
-    streams = probe.get("streams", [])
-    if args.audio >= len(streams) or streams[args.audio]["codec_type"] != "audio":
-        sys.exit("audio stream not audio")
-
-    output_path = Path(args.output)
-    o_dir = output_path.parent
-    if str(o_dir) and not o_dir.is_dir():
-        sys.exit("output dir invalid")
-    if args.audio < 0:
-        sys.exit("invalid audio index")
-
-    wordlist = []
-    for part in args.words.split(","):
-        w = part.strip()
-        if w:
-            wordlist.append(w)
-
+def parse_wordlist(value: str) -> frozenset[str]:
+    wordlist = frozenset(
+        part.strip().lower() for part in value.split(",") if part.strip()
+    )
     if not wordlist:
-        sys.exit("empty word list")
+        raise SystemExit("empty word list")
+    return wordlist
 
 
-def extract_audio(audio_idx: int, input_path: Path, audio_path: Path, logger: Logger):
-    t0 = time.perf_counter()
-    try:
-        in_file = ffmpeg.input(str(input_path))
-        audio = in_file[str(audio_idx)]
-        out_file = ffmpeg.output(audio, str(audio_path), **{"c": "copy"})
-        out, err = ffmpeg.run(out_file, overwrite_output=True, capture_stdout=True, capture_stderr=True)
-    except ffmpeg.Error as e:
-        elapsed = time.perf_counter() - t0
-        stderr_text = e.stderr.decode("utf-8", errors="replace") if e.stderr else ""
-        logger.error("extract_audio_failed",
-                     {"elapsed_sec": f"{elapsed:.3f}"},
-                     f"Audio extraction failed, ffmpeg error: {stderr_text}")
-        raise
-    elapsed = time.perf_counter() - t0
-    logger.info("extract_audio_complete", {"elapsed_sec": f"{elapsed:.3f}", "audio_path": str(audio_path)},
-                "Audio extracted for transcription")
-    sub_log = logger.workdir / "logs" / "extract_audio.log"
-    with open(sub_log, "w") as f:
-        if out:
-            f.write(out.decode("utf-8", errors="replace"))
-        if err:
-            f.write(err.decode("utf-8", errors="replace"))
-
-
-def load_model(model: str, precision: str, logger: Logger) -> WhisperModel:
-    t0 = time.perf_counter()
-    try:
-        whisper = WhisperModel(model, compute_type=precision)
-    except Exception as e:
-        elapsed = time.perf_counter() - t0
-        logger.error("whisper_error", {"model": model, "precision": precision}, str(e))
-        raise
-    elapsed = time.perf_counter() - t0
-    logger.info("whisper_model_loaded", {"model": model, "precision": precision, "elapsed_sec": f"{elapsed:.3f}"})
-    return whisper
-
-
-def transcribe(whisper: WhisperModel, audio_path: Path, logger: Logger) -> list:
-    t0 = time.perf_counter()
-    whisper_log_path = logger.workdir / "logs" / "whisper.log"
-    try:
-        segments, info = whisper.transcribe(str(audio_path), word_timestamps=True)
-        seg_list = list(segments)
-    except Exception as e:
-        elapsed = time.perf_counter() - t0
-        logger.error("transcribe_failed", {"elapsed_sec": f"{elapsed:.3f}", "error": str(e)},
-                     "Transcription failed")
-        raise
-    with open(whisper_log_path, "w") as f:
-        f.write(f"Language: {info.language}\n")
-        f.write(f"Duration: {info.duration:.3f}s\n")
-        f.write("Segments:\n")
-        for seg in seg_list:
-            f.write(f"  [{seg.start:.3f}s -> {seg.end:.3f}s] {seg.text}\n")
-            if seg.words:
-                for w in seg.words:
-                    f.write(f"    word: {w.word} [{w.start:.3f}s -> {w.end:.3f}s]\n")
-    elapsed = time.perf_counter() - t0
-    logger.info("transcribe_complete", {"elapsed_sec": f"{elapsed:.3f}"})
-    return seg_list
-
-
-def match_censored_words(segments, wordlist: frozenset, logger: Logger) -> list[BleepPosition]:
-    bleeps: list[BleepPosition] = []
-    for seg in segments:
-        if not seg.words:
-            continue
-        for w in seg.words:
-            normalized_censored_words = w.word.strip().lower()
-            for censored in wordlist:
-                if censored in normalized_censored_words:
-                    bleeps.append(BleepPosition(word=w.word.strip(), start_sec=w.start, end_sec=w.end))
-                    logger.info("bleep_match",
-                                {"word": w.word.strip(), "start": f"{w.start:.3f}", "end": f"{w.end:.3f}"})
-                    break
-    logger.info("bleep_summary", {"total": str(len(bleeps))})
-    return bleeps
-
-
-def generate_noise(bleeps: list[BleepPosition], audio_path: Path, processed_path: Path, logger: Logger):
-    t0 = time.perf_counter()
-    wav_path = audio_path.with_suffix(".wav")
-    try:
-        in_file = ffmpeg.input(str(audio_path))
-        decode = ffmpeg.output(in_file, str(wav_path), **{"c": "pcm_s16le", "ac": "2"})
-        ffmpeg.run(decode, overwrite_output=True, capture_stdout=True, capture_stderr=True)
-    except ffmpeg.Error as e:
-        elapsed = time.perf_counter() - t0
-        stderr_text = e.stderr.decode("utf-8", errors="replace") if e.stderr else ""
-        logger.error("decode_audio_failed",
-                     {"elapsed_sec": f"{elapsed:.3f}"},
-                     f"Audio decode failed: {stderr_text}")
-        raise
-
-    samples, sr = sf.read(str(wav_path))
-    if samples.ndim == 1:
-        samples = samples.reshape(-1, 1)
-
-    max_amp = 0.8 / 35.0
-    step_size = max_amp * 0.125
-    leak = 0.003
-
-    for bp in bleeps:
-        i0 = max(0, int((bp.start_sec - CENSORED_PAD_START_SEC) * sr))
-        i1 = min(len(samples), int((bp.end_sec + CENSORED_PAD_END_SEC) * sr))
-        length = i1 - i0
-        if length <= 0:
-            continue
-        n_channels = samples.shape[1]
-        steps = np.random.uniform(-step_size, step_size, (length, n_channels))
-        noise = np.empty((length, n_channels), dtype=np.float64)
-        state = np.zeros((1, n_channels), dtype=np.float64)
-        for i in range(length):
-            state = (1.0 - leak) * state + steps[i : i + 1]
-            noise[i] = state
-        samples[i0:i1] = noise.astype(samples.dtype)
-        logger.info("noise_applied",
-                    {"word": bp.word, "start_sec": f"{bp.start_sec:.3f}", "end_sec": f"{bp.end_sec:.3f}",
-                     "i0": str(i0), "i1": str(i1), "samples": str(length)})
-
-    if samples.shape[1] == 1:
-        samples = samples.ravel()
-
-    sf.write(str(processed_path), samples, sr)
-    elapsed = time.perf_counter() - t0
-    logger.info("generate_noise_complete",
-                {"elapsed_sec": f"{elapsed:.3f}", "bleeps_processed": str(len(bleeps))})
-
-
-def _cleanup_intermediate_files(workdir: Path, logger: Logger):
-    audio_exts = {".mka", ".wav", ".m4a"}
+def _cleanup_intermediate_files(paths: list[Path], logger: Logger):
     files = {}
-    for child in workdir.iterdir():
-        if child.is_file() and child.suffix in audio_exts:
-            files[child.name] = child.stat().st_size
-    if not files:
-        return
-    for child in workdir.iterdir():
-        if child.is_file() and child.suffix in audio_exts:
-            child.unlink()
-    logger.info("intermediate_files_deleted", {"files": str(files)})
+    for path in paths:
+        if path.is_file():
+            files[str(path)] = path.stat().st_size
+    for path in paths:
+        path.unlink(missing_ok=True)
+    if files:
+        logger.info("intermediate_files_deleted", {"files": str(files)})
 
 
 def main(argv: list[str] | None = None):
     args = parse_args(argv)
-    validate_args(args)
+    wordlist = parse_wordlist(args.words)
+    remote_host: RemoteHost | None = None
+    if args.remote_host is not None:
+        try:
+            remote_host = parse_remote_host(args.remote_host)
+        except ValueError as error:
+            raise SystemExit(str(error)) from error
 
     workdir = Path(tempfile.mkdtemp(prefix="no_swear_"))
     print(workdir, file=sys.stderr)
     logger = Logger(workdir)
+    intermediate_paths: list[Path] = []
 
-    wordlist = frozenset(w.strip().lower() for w in args.words.split(",") if w.strip())
+    logger.info(
+        "pipeline_start",
+        {
+            "input": args.input,
+            "output": args.output,
+            "audio": str(args.audio),
+            "model": args.model,
+            "precision": args.precision,
+            "words": args.words,
+            "mode": "remote" if remote_host else "local",
+        },
+    )
 
-    logger.info("pipeline_start",
-                {"input": args.input, "output": args.output, "audio": str(args.audio),
-                 "model": args.model, "precision": args.precision, "words": args.words})
+    try:
+        if remote_host:
+            audio_path, probe_result = remote_prepare.prepare(
+                args.input,
+                args.output,
+                args.audio,
+                workdir,
+                remote_host,
+                logger,
+            )
+        else:
+            audio_path, probe_result = local_prepare.prepare(
+                args.input,
+                args.output,
+                args.audio,
+                workdir,
+                logger,
+            )
+        intermediate_paths.append(audio_path)
 
-    input_path = Path(args.input)
-    output_path = Path(args.output)
-    audio_path = workdir / "audio.mka"
+        orig_bitrate = probe_result["streams"][args.audio].get("bit_rate")
+        censored_audio = censor.censor_audio(
+            audio_path,
+            args.model,
+            args.precision,
+            wordlist,
+            orig_bitrate,
+            logger,
+        )
+        intermediate_paths.extend(censored_audio.intermediate_paths)
 
-    extract_audio(args.audio, input_path, audio_path, logger)
-    whisper = load_model(args.model, args.precision, logger)
-    segments = transcribe(whisper, audio_path, logger)
-    bleeps = match_censored_words(segments, wordlist, logger)
+        if remote_host:
+            remote_recombine.recombine(
+                args.input,
+                censored_audio.encoded_path,
+                args.output,
+                args.audio,
+                probe_result,
+                remote_host,
+                logger,
+            )
+        else:
+            local_recombine.recombine(
+                Path(args.input),
+                censored_audio.encoded_path,
+                Path(args.output),
+                args.audio,
+                probe_result,
+                logger,
+            )
 
-    processed_wav = workdir / "processed.wav"
-    generate_noise(bleeps, audio_path, processed_wav, logger)
-
-    probe = ffmpeg.probe(str(input_path))
-    orig_bitrate = probe["streams"][args.audio].get("bit_rate")
-    encoded_audio = workdir / "processed.m4a"
-    encode_to_aac(processed_wav, encoded_audio, orig_bitrate, logger)
-
-    assemble(input_path, encoded_audio, output_path, args.audio, probe, logger)
-
-    logger.info("pipeline_complete", {"bleeps_found": str(len(bleeps))})
-    if not args.keep:
-        _cleanup_intermediate_files(workdir, logger)
-    logger.close()
+        logger.info(
+            "pipeline_complete", {"bleeps_found": str(len(censored_audio.bleeps))}
+        )
+        if not args.keep:
+            _cleanup_intermediate_files(intermediate_paths, logger)
+    finally:
+        logger.close()
